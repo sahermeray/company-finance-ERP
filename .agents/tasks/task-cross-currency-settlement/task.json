@@ -1,0 +1,7 @@
+{
+  "task_id": "task-cross-currency-settlement",
+  "task_description": "Fix the cross-currency supplier settlement workflow in PaymentService: (1) unconditional resolveExchangeRate calls throw before cross-currency logic runs, (2) applied_exchange_rate defaults to payment rate instead of purchase R₀, (3) resolveAccountId bypasses TenantScoped scope causing not-found errors without company context, (4) test data missing direction column and applied_amount fields.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null
+}

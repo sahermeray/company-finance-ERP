@@ -1,0 +1,27 @@
+{
+  "project_type": "Laravel 11 ERP — PHP 8.4, SQLite in tests, MySQL in production",
+  "language": "PHP 8.4",
+  "build_system": "Composer. No frontend build step relevant to this task.",
+  "test_framework": "Pest (php vendor/bin/pest). Feature tests under tests/Feature/. Unit tests under tests/Unit/.",
+  "build_command": "composer install (already run)",
+  "test_command": "php vendor/bin/pest --no-coverage",
+  "verification_instructions": "1. Run targeted file: php vendor/bin/pest tests/Feature/CrossCurrencySettlementTest.php --no-coverage — expect 15/15 pass. 2. Run full suite: php vendor/bin/pest --no-coverage — expect 163 tests, 0 failures. 3. After any PHP edit run: vendor/bin/pint --dirty --format agent",
+  "snapshot_or_generated_files": null,
+  "environment_constraints": "Do not run migrations manually — RefreshDatabase handles this in tests. Do not run tinker. All test helpers (makeCrossContext, makeCrossUsdPurchase) are defined in the test file itself.",
+  "contribution_requirements": "After modifying any PHP file, run vendor/bin/pint --dirty --format agent to fix code style. Use PHP 8 constructor property promotion. All methods must have explicit return types and type hints. Never leave open transactions or partial writes.",
+  "key_patterns": "PaymentService uses DB::transaction wrappers. preparePaymentAttributes() builds the full payment payload including applied_* fields. postPaymentJournal() is private and called by all three public payment methods. AccountingService enforces line.currency === account.currency on postJournal(). FinancialAccount uses TenantScoped global scope — bypass with withoutGlobalScope(CompanyScope::class) and then check company_id manually.",
+  "relevant_files": [
+    "app/Services/PaymentService.php",
+    "tests/Feature/CrossCurrencySettlementTest.php",
+    "app/Services/AccountingService.php",
+    "app/Models/Payment.php",
+    "app/Models/Purchase.php",
+    "app/Models/FinancialAccount.php",
+    "app/Models/Company.php",
+    "app/Eloquent/CompanyScope.php",
+    "tests/Feature/PartnerPaidPurchaseTest.php",
+    "tests/Feature/PaymentOutstandingTest.php",
+    "tests/Feature/PaymentAccountingTest.php"
+  ],
+  "directory_structure": "app/Services/ — all service classes. app/Models/ — Eloquent models with TenantScoped trait. app/Eloquent/ — CompanyScope global scope. tests/Feature/ — Pest feature tests, each uses RefreshDatabase. database/migrations/ — ordered migrations, all already run. database/factories/ — ExchangeRateFactory and UserFactory."
+}

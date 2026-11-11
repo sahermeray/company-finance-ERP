@@ -1,0 +1,57 @@
+{
+  "id": "FEAT-003",
+  "type": "test",
+  "description": "Create tests/Feature/CrossCurrencySettlementTest.php with 15 Pest feature tests covering all cross-currency scenarios. Depends on FEAT-001 and FEAT-002 being complete.",
+  "status": "pending",
+  "steps": [
+    "Create tests/Feature/CrossCurrencySettlementTest.php with 'uses(RefreshDatabase::class);' at the top. Add the following imports: App\\Eloquent\\CompanyScope, App\\Models\\AccountingJournal, App\\Models\\Company, App\\Models\\ExchangeRate, App\\Models\\FinancialAccount, App\\Models\\JournalLine, App\\Models\\Party, App\\Models\\Payment, App\\Models\\Purchase, App\\Services\\AccountingService, App\\Services\\CompanyContextService, App\\Services\\PaymentService, Illuminate\\Foundation\\Testing\\RefreshDatabase, Illuminate\\Validation\\ValidationException.",
+
+    "Add helper function makeCrossContext(bool $setCompanyDefaults = true): array — creates a company with base_currency='SYP', then creates: $usdPayable (liability, USD, code '2000'), $sypCash (asset, SYP, code '1000'), $gainAccount (income, SYP, code '7100'), $lossAccount (expense, SYP, code '8100'), $dueToPartner (liability, SYP, code '2100'). If $setCompanyDefaults is true, calls $company->update(['exchange_gain_account_id' => $gainAccount->id, 'exchange_loss_account_id' => $lossAccount->id]) and $company->refresh(). Returns [$company, $usdPayable, $sypCash, $gainAccount, $lossAccount, $dueToPartner].",
+
+    "Add helper function makeCrossUsdPurchase(Company $company, string $total = '1000', string $rate = '12000'): Purchase — creates a party, then Purchase::create with status='posted', currency='USD', exchange_rate=$rate, base_currency='SYP', total=$total, base_total=bcmul($total,$rate,4).",
+
+    "Write Test 1: 'posts a three-line journal with exchange loss when settlement rate exceeds original rate'. Setup: makeCrossContext(), makeCrossUsdPurchase(rate='12000'), ExchangeRate::create(currency='USD', base_currency='SYP', rate='12500'). Call recordSupplierPayment with amount='12500000', currency='SYP', exchange_rate='1', base_amount='12500000', applied_amount='1000', applied_currency='USD', applied_exchange_rate='12000'. Assert: 3 journal lines, Line 1 debit account=$usdPayable->id currency='USD' debit='1000.0000' base_debit='12000000.0000', Line 2 credit account=$sypCash->id currency='SYP' credit='12500000.0000', Line 3 debit account=$lossAccount->id currency='SYP' debit='500000.0000', sum(base_debit)==sum(base_credit).",
+
+    "Write Test 2: 'posts a three-line journal with exchange gain when settlement rate is below original rate'. Same structure as Test 1 but amount='11800000', applied_exchange_rate='12000', exchange_rate in ExchangeRate='11800'. Assert Line 3 credit account=$gainAccount->id currency='SYP' credit='200000.0000'.",
+
+    "Write Test 3: 'posts a two-line journal when settlement rate equals original rate (no forex line)'. amount='12000000', R0=R1=12000. Assert $lines->toHaveCount(2), sum(base_debit)==sum(base_credit).",
+
+    "Write Test 4: 'outstanding balance is zero after a full cross-currency payment'. Full payment. Assert bccomp($outstanding, '0', 10) == 0.",
+
+    "Write Test 5: 'outstanding balance accumulates correctly across two partial cross-currency payments at different rates'. Purchase total=1000 USD at R0=12000. Payment 1: amount='6200000' SYP, applied_amount='500', applied_currency='USD', applied_exchange_rate='12400'. Assert outstanding=500. Payment 2: amount='5950000' SYP, applied_amount='500', applied_currency='USD', applied_exchange_rate='11900'. Assert outstanding=0.",
+
+    "Write Test 6: 'calculateOutstandingFor divides (not multiplies) to convert SYP applied_amount to USD'. Create purchase with currency='USD', total='1000'. Create Payment::create directly with applied_amount='12000000', applied_currency='SYP', applied_exchange_rate='12000', payable_type=Purchase::class, payable_id=$purchase->id, status='posted', company_id=$company->id, direction='outbound', amount='12000000', currency='SYP', exchange_rate='1', base_currency='SYP'. Call calculateOutstandingForPurchase. Assert bccomp($outstanding, '0', 10) == 0 (division: 12000000/12000=1000=full amount paid).",
+
+    "Write Test 7: 'rejects a SYP debit to a USD-denominated payable account (journal line currency enforcement)'. Use AccountingService directly. Create a draft journal. Call addJournalLine with financial_account_id=$usdPayable->id, debit='1000', currency='SYP'. Expect ValidationException. Then create a second addJournalLine call with currency='USD' to the same account — this must succeed.",
+
+    "Write Test 8: 'posts a three-line journal for a cross-currency partner-paid purchase'. recordPartnerPaidPurchase on a 1000 USD purchase, partner pays 12500000 SYP, payable_account_id=$usdPayable->id, partner_liability_account_id=$dueToPartner->id, exchange_gain_account_id=$gainAccount->id (passed explicitly), exchange_loss_account_id=$lossAccount->id (passed explicitly). Assert 3 lines: Line 1 Dr $usdPayable (USD 1000), Line 2 Cr $dueToPartner (SYP 12500000), Line 3 Dr $lossAccount (SYP 500000). sum(base_debit)==sum(base_credit).",
+
+    "Write Test 9: 'throws when exchange_gain_account_id is missing for a cross-currency payment'. makeCrossContext(setCompanyDefaults: false). recordSupplierPayment on USD purchase with SYP payment, no exchange_gain_account_id in attributes. Expect ValidationException with 'exchange_gain_account_id' in the errors.",
+
+    "Write Test 10: 'throws when the exchange gain account belongs to another company'. makeCrossContext() for Company A. Create Company B with its own income account $gainAccountB. Call recordSupplierPayment on Company A's purchase with exchange_gain_account_id=$gainAccountB->id. Expect ValidationException.",
+
+    "Write Test 11: 'throws when the exchange gain account is the wrong type (not income)'. Create a liability account $notGain. Pass it as exchange_gain_account_id. Expect ValidationException.",
+
+    "Write Test 12: 'prevents overpayment with correct conversion direction after the bcdiv fix'. Purchase total=1000 USD. Attempt to pay 1001 USD equivalent in SYP. Assert ValidationException with 'amount' key.",
+
+    "Write Test 13: 'rolls back payment and journal when forex account is invalid mid-transaction'. Count payments and journals before. Call recordSupplierPayment with exchange_loss_account_id=99999 (non-existent). Catch ValidationException. Assert payment count unchanged, journal count unchanged.",
+
+    "Write Test 14: 'preserves the original purchase journal unchanged after cross-currency settlement'. Use PurchaseService or AccountingService to create and post a purchase journal first (or directly create an AccountingJournal + JournalLines for the purchase). Capture journal->id and line IDs. Then call recordSupplierPayment. Re-fetch the original journal and its lines. Assert journal->id and all line IDs and amounts are identical to before.",
+
+    "Write Test 15: 'isolates cross-currency payments across companies (tenant isolation)'. Create purchase in Company A. Run recordSupplierPayment in a Company B context (using runForCompany on Company B). Expect ValidationException."
+  ],
+  "acceptance_criteria": [
+    "php vendor/bin/pest tests/Feature/CrossCurrencySettlementTest.php --no-coverage passes all 15 tests",
+    "php vendor/bin/pest --no-coverage passes all tests with zero failures",
+    "Test 1 asserts exactly 3 journal lines and sum(base_debit) == sum(base_credit) in base currency",
+    "Test 3 asserts exactly 2 journal lines (no forex line when rates are equal)",
+    "Test 6 confirms bcdiv fix: 12000000 / 12000 = 1000, outstanding = 0",
+    "Test 14 confirms original purchase journal is untouched after settlement"
+  ],
+  "verification": [
+    "php vendor/bin/pest tests/Feature/CrossCurrencySettlementTest.php --no-coverage",
+    "php vendor/bin/pest --no-coverage"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

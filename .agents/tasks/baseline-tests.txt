@@ -1,0 +1,63 @@
+Baseline Test Results
+=====================
+Captured: 2026-10-24
+
+Command: php vendor/bin/pest --no-coverage
+Exit code: 2 (non-zero due to failures)
+
+Summary:
+  Tests:      163 total (149 passed, 14 failed)
+  Assertions: 373
+  Duration:   ~2.3s
+
+Status: FAILING BASELINE
+14 tests in Tests\Feature\CrossCurrencySettlementTest are failing.
+The CrossCurrencySettlementTest file exists but its implementation is incomplete —
+the underlying PaymentService does not yet support cross-currency settlement journaling.
+
+Failing tests (all in Tests\Feature\CrossCurrencySettlementTest):
+  1.  posts a three-line journal with exchange loss when settling USD purchase with SYP
+      Error: ValidationException "No exchange rate is available for USD to SYP."
+  2.  posts a three-line journal with exchange gain when settling USD purchase with SYP
+      Error: ValidationException "No exchange rate is available for USD to SYP."
+  3.  posts a two-line journal when settlement rate equals original carrying rate (no FX)
+      Error: ValidationException "No exchange rate is available for USD to SYP."
+  4.  outstanding balance is zero after a full cross-currency settlement
+      Error: ValidationException "No exchange rate is available for USD to SYP."
+  5.  outstanding balance accumulates correctly across two partial cross-currency payments
+      Error: ValidationException "No exchange rate is available for USD to SYP."
+  6.  calculateOutstandingFor divides (not multiplies) to convert SYP payment to USD outstanding
+      Error: QueryException — NOT NULL constraint failed: payments.direction
+  7.  rejects a SYP debit to a USD-denominated payable account (currency mismatch on debit line)
+      Error: ValidationException "No exchange rate is available for USD to SYP."
+  8.  posts a three-line journal for a cross-currency partner-paid purchase
+      Error: ValidationException "The selected Due-to-partner liability account does not exist."
+  9.  throws when exchange_gain_account_id is missing for a cross-currency payment
+      Expected: "Exchange gain and loss accounts are required"
+      Got: "No exchange rate is available for USD to SYP."
+  10. throws when the exchange gain account belongs to another company
+      Expected: "must belong to the same company"
+      Got: "No exchange rate is available for USD to SYP."
+  11. throws when the exchange gain account is the wrong type (not income)
+      Expected: "must be of type: income"
+      Got: "No exchange rate is available for USD to SYP."
+  12. prevents overpayment with correct conversion direction after the bcdiv fix
+      Expected: "exceeds the outstanding balance"
+      Got: "No exchange rate is available for USD to SYP."
+  13. preserves the original purchase journal unchanged after settlement
+      Error: ValidationException "The selected account does not exist." (AccountingService.php:55)
+  14. isolates cross-currency payments across companies (tenant isolation)
+      Expected: "must belong to the same company"
+      Got: "No exchange rate is available for USD to SYP."
+
+Previously passing tests (before CrossCurrencySettlementTest was added):
+  The original suite had 148 passing tests and 366 assertions.
+  The 14 new CrossCurrencySettlementTest tests are the failing ones; 1 of the 15 new tests passes
+  (rolls back payment and journal when forex account is invalid mid-transaction).
+
+Root cause pattern:
+  Most failures share the same root cause: PaymentService throws "No exchange rate is available
+  for USD to SYP" before reaching the new cross-currency journal logic. This means the exchange
+  rate lookup/validation runs before the FX account validation, and the rate is not being seeded
+  or passed correctly in the test setup for those cases.
+  One test (direction NOT NULL) reveals a missing `direction` column on the payments table.

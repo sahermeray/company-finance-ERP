@@ -1,0 +1,10 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    "nullOnDelete on reversed_by_payment_id erases reversal evidence — if the reversal payment is deleted (e.g. via a future draft workflow or raw DB operation), the original payment's reversed_by_payment_id silently becomes NULL and it looks unreversed. Change the FK to restrictOnDelete().",
+    "reversal_of_payment_id has no index — foreignId().nullable().constrained() does not add a standalone index; the SQLite schema confirms none exists. Add $table->index('reversal_of_payment_id') in the migration.",
+    "Cross-currency FX tests 3 and 4 assert line count (3) only — a sign error on the FX line (credit instead of debit, or wrong account) would not be caught. Add assertions verifying the FX line's financial_account_id and debit/credit direction.",
+    "nullOnDelete on reversal_of_journal_id (pre-existing, migration 2026_10_10) could sever the reversal-to-original audit trail if the original journal were deleted via a DB bypass. The Eloquent deleting hook currently prevents this, but the FK constraint does not enforce it independently."
+  ],
+  "reviewDoc": "/Users/admin/Herd/company-finance-ERP/.agents/tasks/review.md"
+}
