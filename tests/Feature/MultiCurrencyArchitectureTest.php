@@ -13,6 +13,7 @@ use App\Services\AccountingService;
 use App\Services\CompanyContextService;
 use App\Services\PaymentService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
@@ -102,9 +103,7 @@ it('keeps party balances separated by transaction currency', function () {
         'company_id' => $company->id,
         'journal_number' => 'JRN-MULTI-001',
         'entry_date' => '2026-10-08',
-        'status' => 'posted',
         'description' => 'Opening customer balances',
-        'posted_at' => '2026-10-08 09:00:00',
     ]);
     $usdReceivable = FinancialAccount::create([
         'company_id' => $company->id,
@@ -180,6 +179,10 @@ it('keeps party balances separated by transaction currency', function () {
         'base_currency' => 'SYP',
         'base_debit' => '0',
         'base_credit' => '5000000',
+    ]);
+    DB::table('accounting_journals')->where('id', $journal->id)->update([
+        'status' => 'posted',
+        'posted_at' => '2026-10-08 09:00:00',
     ]);
     app(CompanyContextService::class)->runForCompany($company, function () use (
 

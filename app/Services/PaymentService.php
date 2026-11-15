@@ -6,6 +6,7 @@ use App\Eloquent\CompanyScope;
 use App\Models\AccountingJournal;
 use App\Models\Company;
 use App\Models\ExchangeRate;
+use App\Models\Expense;
 use App\Models\FinancialAccount;
 use App\Models\JournalLine;
 use App\Models\Party;
@@ -180,6 +181,293 @@ class PaymentService
                 debitAccountId: $payableAccountId,
                 creditAccountId: $cashAccountId,
                 description: 'Supplier payment '.$payment->payment_number.' for '.$purchase->purchase_number,
+                exchangeGainAccountId: $exchangeGainAccountId,
+                exchangeLossAccountId: $exchangeLossAccountId,
+            );
+
+            return $payment->fresh();
+        });
+    }
+
+    public function recordExpensePayment(Expense $expense, array $attributes = []): Payment
+    {
+        $company = Company::query()->find($expense->company_id);
+        $activeCompanyId = $this->companyContext->id();
+
+        if (
+            $company === null
+            || ($activeCompanyId !== null && $activeCompanyId !== (int) $company->getKey())
+            || (Auth::check() && $activeCompanyId === null)
+            || (int) $expense->company_id !== (int) $company->getKey()
+        ) {
+            throw ValidationException::withMessages([
+                'expense' => 'The expense does not belong to the active company.',
+            ]);
+        }
+
+        if ($expense->status !== 'posted' || $expense->posted_at === null) {
+            throw ValidationException::withMessages([
+                'expense' => 'Only posted expenses can be settled.',
+            ]);
+        }
+
+        if ($expense->payable_account_id === null || $expense->payment_financial_account_id !== null) {
+            throw ValidationException::withMessages([
+                'expense' => 'Only posted unpaid expenses with a configured payable account can be settled.',
+            ]);
+        }
+
+        if (
+            isset($attributes['payable_account_id'])
+            && (int) $attributes['payable_account_id'] !== (int) $expense->payable_account_id
+        ) {
+            throw ValidationException::withMessages([
+                'payable_account_id' => 'The payment must use the payable account approved on the expense.',
+            ]);
+        }
+
+        $currency = strtoupper((string) ($attributes['currency'] ?? $expense->currency));
+        $baseCurrency = strtoupper((string) ($expense->base_currency ?? $company->base_currency));
+        $expenseCurrency = strtoupper((string) $expense->currency);
+        $expenseRate = $this->normalizeAmount((string) ($expense->exchange_rate ?? '0'), 'exchange_rate');
+
+        if (
+            ! in_array($currency, ['SYP', 'USD'], true)
+            || ! in_array($expenseCurrency, ['SYP', 'USD'], true)
+            || ! in_array($baseCurrency, ['SYP', 'USD'], true)
+            || bccomp($expenseRate, '0', 10) <= 0
+        ) {
+            throw ValidationException::withMessages([
+                'currency' => 'Expense settlement requires supported currencies and a stored positive expense exchange rate.',
+            ]);
+        }
+        if (
+            isset($attributes['base_currency'])
+            && strtoupper((string) $attributes['base_currency']) !== $baseCurrency
+        ) {
+            throw ValidationException::withMessages([
+                'base_currency' => 'The payment base currency must match the expense company base currency.',
+            ]);
+        }
+
+        $paymentRate = $this->normalizeAmount(
+            (string) ($attributes['exchange_rate'] ?? (
+                $currency === $baseCurrency
+                    ? '1'
+                    : ($currency === $expenseCurrency
+                        ? $expenseRate
+                        : $this->resolveExchangeRate($currency, $baseCurrency, $company))
+            )),
+            'exchange_rate',
+        );
+        if (bccomp($paymentRate, '0', 10) <= 0) {
+            throw ValidationException::withMessages([
+                'exchange_rate' => 'The payment exchange rate must be greater than zero.',
+            ]);
+        }
+        if ($currency === $baseCurrency && bccomp($paymentRate, '1', 10) !== 0) {
+            throw ValidationException::withMessages([
+                'exchange_rate' => 'Payments in the company base currency must use an exchange rate of 1.',
+            ]);
+        }
+
+        $amount = $this->normalizeAmount((string) ($attributes['amount'] ?? '0'), 'amount');
+        $expectedAppliedAmount = match (true) {
+            $currency === $expenseCurrency => $amount,
+            $currency === $baseCurrency => bcdiv($amount, $expenseRate, 10),
+            $expenseCurrency === $baseCurrency => bcmul($amount, $paymentRate, 10),
+            default => throw ValidationException::withMessages([
+                'currency' => 'Expense settlement cannot convert between two foreign currencies.',
+            ]),
+        };
+        $appliedAmount = $this->normalizeAmount(
+            (string) ($attributes['applied_amount'] ?? $expectedAppliedAmount),
+            'applied_amount',
+        );
+
+        if (bccomp($appliedAmount, $expectedAppliedAmount, 4) !== 0) {
+            throw ValidationException::withMessages([
+                'applied_amount' => 'The applied amount must reconcile with the payment amount and stored exchange rates.',
+            ]);
+        }
+
+        $appliedRate = $expenseRate;
+        if (
+            isset($attributes['applied_currency'])
+            && strtoupper((string) $attributes['applied_currency']) !== $expenseCurrency
+        ) {
+            throw ValidationException::withMessages([
+                'applied_currency' => 'The applied currency must match the expense currency.',
+            ]);
+        }
+        if (
+            isset($attributes['applied_exchange_rate'])
+            && bccomp((string) $attributes['applied_exchange_rate'], $appliedRate, 10) !== 0
+        ) {
+            throw ValidationException::withMessages([
+                'applied_exchange_rate' => 'The applied exchange rate must preserve the expense historical rate.',
+            ]);
+        }
+
+        $expectedPaymentBaseAmount = $this->normalizeAmount(
+            $this->convertAmount($amount, $paymentRate, $baseCurrency, $currency),
+            'base_amount',
+        );
+        $paymentBaseAmount = $this->normalizeAmount(
+            (string) ($attributes['base_amount'] ?? $expectedPaymentBaseAmount),
+            'base_amount',
+        );
+        if (bccomp($paymentBaseAmount, $expectedPaymentBaseAmount, 4) !== 0) {
+            throw ValidationException::withMessages([
+                'base_amount' => 'The payment base amount must match its stored exchange rate.',
+            ]);
+        }
+        $appliedBaseAmount = $this->normalizeAmount(
+            (string) ($attributes['applied_base_amount'] ?? bcmul($appliedAmount, $appliedRate, 10)),
+            'applied_base_amount',
+        );
+
+        if (bccomp($appliedBaseAmount, bcmul($appliedAmount, $appliedRate, 10), 4) !== 0) {
+            throw ValidationException::withMessages([
+                'applied_base_amount' => 'The applied base amount must use the expense historical exchange rate.',
+            ]);
+        }
+
+        $payload = array_merge([
+            'company_id' => $company->getKey(),
+            'party_id' => $expense->party_id,
+            'project_id' => $expense->project_id,
+            'payable_type' => Expense::class,
+            'payable_id' => $expense->getKey(),
+            'direction' => 'outbound',
+            'status' => 'posted',
+            'paid_at' => now(),
+            'currency' => $currency,
+            'exchange_rate' => $paymentRate,
+            'base_currency' => $baseCurrency,
+            'amount' => $amount,
+            'base_amount' => $paymentBaseAmount,
+            'applied_amount' => $appliedAmount,
+            'applied_currency' => $expenseCurrency,
+            'applied_exchange_rate' => $appliedRate,
+            'applied_base_amount' => $appliedBaseAmount,
+            'payment_number' => $this->generatePaymentNumber($company),
+        ], $attributes);
+
+        $payload = $this->preparePostedPaymentPayload(
+            $payload,
+            $attributes,
+            $company,
+            Expense::class,
+            $expense->getKey(),
+            'outbound',
+        );
+
+        return DB::transaction(function () use ($expense, $company, $payload, $attributes): Payment {
+            Company::query()->whereKey($company->getKey())->lockForUpdate()->firstOrFail();
+
+            $lockedExpense = Expense::withoutGlobalScope(CompanyScope::class)
+                ->where('company_id', $company->getKey())
+                ->lockForUpdate()
+                ->find($expense->getKey());
+
+            if (
+                $lockedExpense === null
+                || $lockedExpense->status !== 'posted'
+                || $lockedExpense->posted_at === null
+                || $lockedExpense->payable_account_id === null
+                || $lockedExpense->payment_financial_account_id !== null
+            ) {
+                throw ValidationException::withMessages([
+                    'expense' => 'Only posted unpaid expenses can be settled.',
+                ]);
+            }
+
+            $journal = $lockedExpense->postedJournal()->first();
+            $originalJournalCount = AccountingJournal::withoutGlobalScope(CompanyScope::class)
+                ->where('company_id', $company->getKey())
+                ->where('sourceable_type', Expense::class)
+                ->where('sourceable_id', $lockedExpense->getKey())
+                ->whereNull('reversal_of_journal_id')
+                ->count();
+            if (
+                $journal === null
+                || $originalJournalCount !== 1
+                || (int) $journal->getKey() !== (int) $lockedExpense->accounting_journal_id
+                || $journal->status !== 'posted'
+                || $journal->reversed_by_journal_id !== null
+                || (int) $journal->company_id !== (int) $company->getKey()
+                || $journal->sourceable_type !== Expense::class
+                || (int) $journal->sourceable_id !== (int) $lockedExpense->getKey()
+            ) {
+                throw ValidationException::withMessages([
+                    'expense' => 'The expense must have one active posted accounting journal before settlement.',
+                ]);
+            }
+
+            $payableAccountId = $this->resolveAccountId(
+                $company,
+                (int) $lockedExpense->payable_account_id,
+                ['liability'],
+                'payable_account_id',
+                'Expense payable account',
+            );
+            $payableAccount = FinancialAccount::withoutGlobalScope(CompanyScope::class)->find($payableAccountId);
+            if (
+                $payableAccount === null
+                || ! $payableAccount->is_active
+                || strtoupper((string) $payableAccount->currency) !== strtoupper((string) $lockedExpense->currency)
+            ) {
+                throw ValidationException::withMessages([
+                    'payable_account_id' => 'The approved expense payable account must be active and use the expense currency.',
+                ]);
+            }
+
+            if (empty($payload['financial_account_id'])) {
+                throw ValidationException::withMessages([
+                    'financial_account_id' => 'A cash or bank account is required to settle an expense.',
+                ]);
+            }
+
+            $paymentAccount = FinancialAccount::withoutGlobalScope(CompanyScope::class)
+                ->find($payload['financial_account_id']);
+            if (
+                $paymentAccount === null
+                || ! $paymentAccount->is_active
+                || (int) $paymentAccount->company_id !== (int) $company->getKey()
+                || strtolower((string) $paymentAccount->account_type) !== 'asset'
+                || strtoupper((string) $paymentAccount->currency) !== strtoupper((string) $payload['currency'])
+            ) {
+                throw ValidationException::withMessages([
+                    'financial_account_id' => 'The selected payment account must be an active same-company asset in the payment currency.',
+                ]);
+            }
+
+            $payment = $this->persistPostedPayment($payload, $company);
+            $exchangeGainAccountId = $this->resolveForexAccountId(
+                $company,
+                isset($attributes['exchange_gain_account_id']) ? (int) $attributes['exchange_gain_account_id'] : null,
+                $company->exchange_gain_account_id ? (int) $company->exchange_gain_account_id : null,
+                ['income'],
+                'exchange_gain_account_id',
+                'Exchange gain account',
+            );
+            $exchangeLossAccountId = $this->resolveForexAccountId(
+                $company,
+                isset($attributes['exchange_loss_account_id']) ? (int) $attributes['exchange_loss_account_id'] : null,
+                $company->exchange_loss_account_id ? (int) $company->exchange_loss_account_id : null,
+                ['expense'],
+                'exchange_loss_account_id',
+                'Exchange loss account',
+            );
+
+            $this->postPaymentJournal(
+                $payment,
+                $lockedExpense,
+                $company,
+                debitAccountId: $payableAccountId,
+                creditAccountId: $paymentAccount->getKey(),
+                description: 'Expense settlement '.$payment->payment_number.' for '.$lockedExpense->expense_number,
                 exchangeGainAccountId: $exchangeGainAccountId,
                 exchangeLossAccountId: $exchangeLossAccountId,
             );
@@ -641,6 +929,21 @@ class PaymentService
         return $this->calculateOutstandingFor($revenue);
     }
 
+    public function calculateOutstandingForExpense(Expense $expense): string
+    {
+        $activeCompanyId = $this->companyContext->id();
+        if (
+            (Auth::check() && $activeCompanyId === null)
+            || ($activeCompanyId !== null && $activeCompanyId !== (int) $expense->company_id)
+        ) {
+            throw ValidationException::withMessages([
+                'expense' => 'The expense does not belong to the active company.',
+            ]);
+        }
+
+        return $this->calculateOutstandingFor($expense);
+    }
+
     public function calculateOutstandingFor(object $payable): string
     {
         $companyId = isset($payable->company_id) ? (int) $payable->company_id : null;
@@ -738,92 +1041,35 @@ class PaymentService
         array $attributes = [],
         ?Company $company = null,
     ): Payment {
-        // 1. Resolve company — explicit arg or active context; never silently skip isolation.
         $company ??= $this->companyContext->requireCurrent();
+        $activeCompanyId = $this->companyContext->id();
 
-        // 2. Verify payment belongs to the resolved company.
-        if ((int) $payment->company_id !== (int) $company->getKey()) {
+        if (
+            (int) $payment->company_id !== (int) $company->getKey()
+            || ($activeCompanyId !== null && (int) $activeCompanyId !== (int) $company->getKey())
+        ) {
             throw ValidationException::withMessages([
                 'payment' => 'The payment does not belong to the active company.',
             ]);
         }
 
-        // 2a. Guard: a reversal payment (reversal_of_payment_id is set) cannot itself be reversed.
-        //     Reversing a reversal would create a chain of reversals rather than the intended
-        //     equal-and-opposite cancellation, and would break the one-original-one-reversal invariant.
-        if ($payment->reversal_of_payment_id !== null) {
-            throw ValidationException::withMessages([
-                'payment' => 'A reversal payment cannot itself be reversed.',
-            ]);
-        }
+        return DB::transaction(function () use ($payment, $company, $attributes): Payment {
+            Company::query()->whereKey($company->getKey())->lockForUpdate()->firstOrFail();
 
-        // 3. Only posted payments can be reversed.
-        if ($payment->status !== 'posted') {
-            throw ValidationException::withMessages([
-                'payment' => 'Only posted payments can be reversed. Draft payments should be deleted instead.',
-            ]);
-        }
-
-        // 4. Reject already-reversed payments.
-        //    Application-level guard for Finding 1: even when the DB engine cannot
-        //    enforce RESTRICT on the reversed_by_payment_id FK (e.g. SQLite uses
-        //    SET NULL), we verify here that the reversal payment still exists. If the
-        //    reversal were deleted the FK would NULL out reversed_by_payment_id and
-        //    the payment would silently appear un-reversed. By re-checking this inside
-        //    the service (and again inside the transaction below) we catch that case.
-        if ($payment->reversed_by_payment_id !== null) {
-            throw ValidationException::withMessages([
-                'payment' => 'This payment has already been reversed.',
-            ]);
-        }
-
-        // Secondary guard: if the DB silently NULLed reversed_by_payment_id via SET NULL
-        // after the reversal payment was deleted, the status field will still be 'reversed',
-        // making the inconsistency detectable here.
-        if ($payment->status === 'reversed') {
-            throw ValidationException::withMessages([
-                'payment' => 'This payment has already been reversed.',
-            ]);
-        }
-
-        // 5. Locate the single posted journal for this payment.
-        $journals = AccountingJournal::withoutGlobalScope(CompanyScope::class)
-            ->where('sourceable_type', Payment::class)
-            ->where('sourceable_id', $payment->getKey())
-            ->get();
-
-        if ($journals->isEmpty() || $journals->first()->status !== 'posted') {
-            throw ValidationException::withMessages([
-                'payment' => 'No posted accounting journal was found for this payment.',
-            ]);
-        }
-
-        if ($journals->count() > 1) {
-            throw ValidationException::withMessages([
-                'payment' => 'Multiple posted journals exist for this payment; cannot determine which to reverse.',
-            ]);
-        }
-
-        $originalJournal = $journals->first();
-
-        // 6. Reject if the journal has already been reversed.
-        if ($originalJournal->reversed_by_journal_id !== null) {
-            throw ValidationException::withMessages([
-                'journal' => 'The accounting journal for this payment has already been reversed.',
-            ]);
-        }
-
-        return DB::transaction(function () use ($payment, $company, $attributes, $originalJournal): Payment {
-            // 7a. Lock the original payment row to prevent concurrent reversals.
-            //     lockForUpdate() is a no-op on SQLite but serialises on MySQL/PostgreSQL.
             $lockedPayment = Payment::withoutGlobalScope(CompanyScope::class)
+                ->where('company_id', $company->getKey())
                 ->lockForUpdate()
                 ->find($payment->getKey());
 
-            // 7b. Re-read status and reversed_by_payment_id inside the transaction (TOCTOU guard).
-            if ($lockedPayment === null || $lockedPayment->status !== 'posted') {
+            if ($lockedPayment === null || $lockedPayment->status !== 'posted' || $lockedPayment->posted_at === null) {
                 throw ValidationException::withMessages([
                     'payment' => 'Only posted payments can be reversed. Draft payments should be deleted instead.',
+                ]);
+            }
+
+            if ($lockedPayment->reversal_of_payment_id !== null) {
+                throw ValidationException::withMessages([
+                    'payment' => 'A reversal payment cannot itself be reversed.',
                 ]);
             }
 
@@ -833,22 +1079,29 @@ class PaymentService
                 ]);
             }
 
-            // TOCTOU guard: reject if this is a reversal payment (reversal_of_payment_id is set).
-            // This re-checks inside the transaction using the authoritative locked row so a
-            // race between the pre-transaction check and the lock cannot be exploited.
-            if ($lockedPayment->reversal_of_payment_id !== null) {
+            $this->assertPaymentReferencesBelongToCompany($lockedPayment, $company);
+
+            $journals = AccountingJournal::withoutGlobalScope(CompanyScope::class)
+                ->where('sourceable_type', Payment::class)
+                ->where('sourceable_id', $lockedPayment->getKey())
+                ->lockForUpdate()
+                ->get();
+            $postedJournals = $journals->where('status', 'posted')->values();
+
+            if ($journals->count() !== 1 || $postedJournals->count() !== 1) {
                 throw ValidationException::withMessages([
-                    'payment' => 'A reversal payment cannot itself be reversed.',
+                    'payment' => 'A posted payment must have exactly one associated posted accounting journal before reversal.',
                 ]);
             }
 
-            // Application-level guard for Finding 1: also block re-reversal when the DB
-            // engine silently NULLed reversed_by_payment_id (SQLite SET NULL behaviour).
-            // The status='reversed' field remains intact even after that NULL, so it is
-            // the reliable second guard on SQLite.
-            if ($lockedPayment->status === 'reversed') {
+            $originalJournal = $postedJournals->first();
+
+            if (
+                (int) $originalJournal->company_id !== (int) $company->getKey()
+                || $originalJournal->reversed_by_journal_id !== null
+            ) {
                 throw ValidationException::withMessages([
-                    'payment' => 'This payment has already been reversed.',
+                    'journal' => 'The payment journal must be active and belong to the same company as the payment.',
                 ]);
             }
 
@@ -858,35 +1111,42 @@ class PaymentService
             //       - reversed_by_payment_id       → that field belongs to the original, not the reversal.
             //     Set reversal_of_payment_id to link back to the original.
             $reversalPayment = Payment::create([
-                'company_id' => $payment->company_id,
-                'party_id' => $payment->party_id,
-                'financial_account_id' => $payment->financial_account_id,
-                'currency' => $payment->currency,
-                'amount' => $payment->amount,
-                'exchange_rate' => $payment->exchange_rate,
-                'base_currency' => $payment->base_currency,
-                'base_amount' => $payment->base_amount,
-                'direction' => $payment->direction,
+                'company_id' => $lockedPayment->company_id,
+                'party_id' => $lockedPayment->party_id,
+                'project_id' => $lockedPayment->project_id,
+                'financial_account_id' => $lockedPayment->financial_account_id,
+                'created_by' => $lockedPayment->created_by,
+                'payable_type' => $lockedPayment->payable_type,
+                'payable_id' => $lockedPayment->payable_id,
+                'payment_number' => $this->generatePaymentNumber($company),
+                'direction' => $lockedPayment->direction,
+                'method' => $lockedPayment->method,
+                'amount' => $lockedPayment->amount,
+                'currency' => $lockedPayment->currency,
+                'exchange_rate' => $lockedPayment->exchange_rate,
+                'base_currency' => $lockedPayment->base_currency,
+                'base_amount' => $lockedPayment->base_amount,
+                'applied_amount' => $lockedPayment->applied_amount,
+                'applied_currency' => $lockedPayment->applied_currency,
+                'applied_exchange_rate' => $lockedPayment->applied_exchange_rate,
+                'applied_base_amount' => $lockedPayment->applied_base_amount,
                 'paid_at' => $attributes['paid_at'] ?? now(),
-                'applied_amount' => $payment->applied_amount,
-                'applied_currency' => $payment->applied_currency,
-                'applied_exchange_rate' => $payment->applied_exchange_rate,
-                'applied_base_amount' => $payment->applied_base_amount,
+                'reference' => $lockedPayment->reference,
+                'notes' => $lockedPayment->notes,
                 'status' => 'posted',
                 'posted_at' => now(),
-                'reversal_of_payment_id' => $payment->getKey(),
-                'payment_number' => $this->generatePaymentNumber($company),
-                // payable_type and payable_id are intentionally omitted:
-                // the reversal is not a new payment against the original document.
+                'reversal_of_payment_id' => $lockedPayment->getKey(),
             ]);
 
             // 7d. Reverse the accounting journal.
             //     reverseJournal() wraps itself in a DB::transaction — nesting is safe in Laravel.
             //     The reversal journal initially inherits sourceable from the original journal;
             //     we re-point it to the reversal payment in step 7e.
-            $reversalJournal = $this->accounting->reverseJournal($originalJournal, [
+            $reversalJournal = $this->accounting->reversePaymentJournal($originalJournal, [
                 'description' => $attributes['description'] ?? 'Reversal of payment #'.$payment->getKey(),
                 'entry_date' => $attributes['entry_date'] ?? now()->toDateString(),
+                'sourceable_type' => Payment::class,
+                'sourceable_id' => $reversalPayment->getKey(),
             ]);
 
             // 7e. Re-point the reversal journal's sourceable to the reversal payment.
@@ -897,27 +1157,7 @@ class PaymentService
             //     and the immutability hook exists to prevent accidental edits, not this
             //     deliberate, audited re-association performed immediately after creation inside
             //     this transaction.
-            $updated = DB::table('accounting_journals')
-                ->where('id', $reversalJournal->getKey())
-                ->where('sourceable_type', Payment::class)      // defensive: confirm prior value
-                ->where('sourceable_id', $payment->getKey())    // confirm journal still points to original payment
-                ->update([
-                    'sourceable_type' => Payment::class,
-                    'sourceable_id' => $reversalPayment->getKey(),
-                ]);
-
-            if ($updated !== 1) {
-                throw new \RuntimeException(
-                    'Failed to re-associate reversal journal sourceable: expected 1 row updated, got '.$updated
-                );
-            }
-
-            // 7f. Transition original payment to 'reversed' and link it to the reversal.
-            //     This succeeds because the Payment updating hook whitelists
-            //     ['status', 'reversed_by_payment_id'] when transitioning from 'posted',
-            //     and 'reversed' is the only allowed target status.
-            $lockedPayment->status = 'reversed';
-            $lockedPayment->reversed_by_payment_id = $reversalPayment->getKey();
+            $lockedPayment->markAsReversedBy($reversalPayment);
             $lockedPayment->save();
 
             $postedReversalJournal = $this->assertPostedPaymentHasExactlyOnePostedJournal($reversalPayment);
@@ -937,8 +1177,62 @@ class PaymentService
             }
 
             // 7g. Return the fresh reversal payment.
-            return $reversalPayment->fresh();
+            return Payment::withoutGlobalScope(CompanyScope::class)->findOrFail($reversalPayment->getKey());
         });
+    }
+
+    private function assertPaymentReferencesBelongToCompany(Payment $payment, Company $company): void
+    {
+        if (
+            strtoupper((string) $payment->base_currency) !== strtoupper((string) $company->base_currency)
+            || preg_match('/^[A-Z]{3}$/', strtoupper((string) $payment->currency)) !== 1
+            || preg_match('/^[A-Z]{3}$/', strtoupper((string) $payment->base_currency)) !== 1
+        ) {
+            throw ValidationException::withMessages([
+                'currency' => 'Payment and base currencies must be valid and the base currency must match its company.',
+            ]);
+        }
+
+        if ($payment->party_id !== null) {
+            $party = Party::withoutGlobalScope(CompanyScope::class)->find($payment->party_id);
+
+            if ($party === null || (int) $party->company_id !== (int) $company->getKey()) {
+                throw ValidationException::withMessages([
+                    'party_id' => 'The payment party must belong to the payment company.',
+                ]);
+            }
+        }
+
+        if ($payment->financial_account_id !== null) {
+            $account = FinancialAccount::withoutGlobalScope(CompanyScope::class)->find($payment->financial_account_id);
+
+            if (
+                $account === null
+                || (int) $account->company_id !== (int) $company->getKey()
+                || strtoupper((string) $account->currency) !== strtoupper((string) $payment->currency)
+            ) {
+                throw ValidationException::withMessages([
+                    'financial_account_id' => 'The payment account must belong to the payment company and use the payment currency.',
+                ]);
+            }
+        }
+
+        if ($payment->payable_type === null && $payment->payable_id === null) {
+            return;
+        }
+
+        $source = match ($payment->payable_type) {
+            Purchase::class => Purchase::withoutGlobalScope(CompanyScope::class)->find($payment->payable_id),
+            Revenue::class => Revenue::withoutGlobalScope(CompanyScope::class)->find($payment->payable_id),
+            Expense::class => Expense::withoutGlobalScope(CompanyScope::class)->find($payment->payable_id),
+            default => null,
+        };
+
+        if ($source === null || (int) $source->company_id !== (int) $company->getKey()) {
+            throw ValidationException::withMessages([
+                'payable' => 'The payment source must exist and belong to the payment company.',
+            ]);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -1486,13 +1780,17 @@ class PaymentService
         ];
     }
 
-    private function resolvePayableWithLock(string $payableType, int $payableId, Company $company): Purchase|Revenue
+    private function resolvePayableWithLock(string $payableType, int $payableId, Company $company): Purchase|Revenue|Expense
     {
         $model = $this->resolveMorphedClass($payableType);
 
-        if (! is_a($model, Purchase::class, true) && ! is_a($model, Revenue::class, true)) {
+        if (
+            ! is_a($model, Purchase::class, true)
+            && ! is_a($model, Revenue::class, true)
+            && ! is_a($model, Expense::class, true)
+        ) {
             throw ValidationException::withMessages([
-                'payable_type' => 'Only purchases and revenues can be settled through a payment.',
+                'payable_type' => 'Only purchases, revenues, and posted expenses can be settled through a payment.',
             ]);
         }
 
@@ -1513,6 +1811,12 @@ class PaymentService
         if ((int) $record->company_id !== (int) $company->getKey()) {
             throw ValidationException::withMessages([
                 'payable_id' => 'The selected payable record must belong to the active company.',
+            ]);
+        }
+
+        if ($record instanceof Expense && ($record->status !== 'posted' || $record->posted_at === null)) {
+            throw ValidationException::withMessages([
+                'payable_id' => 'Only posted expenses can be settled through a payment.',
             ]);
         }
 

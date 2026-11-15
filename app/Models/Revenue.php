@@ -17,6 +17,9 @@ class Revenue extends Model
     protected $fillable = [
         'company_id',
         'party_id',
+        'receivable_account_id',
+        'cash_account_id',
+        'inventory_asset_account_id',
         'project_id',
         'created_by',
         'revenue_number',
@@ -82,6 +85,21 @@ class Revenue extends Model
     public function party(): BelongsTo
     {
         return $this->belongsTo(Party::class);
+    }
+
+    public function receivableAccount(): BelongsTo
+    {
+        return $this->belongsTo(FinancialAccount::class, 'receivable_account_id');
+    }
+
+    public function cashAccount(): BelongsTo
+    {
+        return $this->belongsTo(FinancialAccount::class, 'cash_account_id');
+    }
+
+    public function inventoryAssetAccount(): BelongsTo
+    {
+        return $this->belongsTo(FinancialAccount::class, 'inventory_asset_account_id');
     }
 
     public function project(): BelongsTo

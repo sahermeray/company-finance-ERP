@@ -18,6 +18,8 @@ class CompanyContextController extends Controller
 
         $companyContext->switchTo($user, $request->integer('company_id'));
 
-        return back();
+        $returnTo = $request->validated('return_to');
+
+        return $returnTo === null ? back() : redirect()->to($returnTo);
     }
 }

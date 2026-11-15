@@ -2,9 +2,11 @@
 
 namespace App\Models;
 
+use App\Eloquent\CompanyScope;
 use App\Models\Concerns\TenantScoped;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Validation\ValidationException;
 
 class JournalLine extends Model
 {
@@ -17,27 +19,82 @@ class JournalLine extends Model
 
     public static function booted(): void
     {
+        static::creating(function (self $line): void {
+            self::assertBelongsToDraftJournal($line, (int) $line->accounting_journal_id);
+            self::assertOwnershipIsConsistent($line);
+        });
+
         static::updating(function (self $line): void {
-            // Load the parent journal without the global scope to avoid false negatives
-            // when no company context is active (e.g. internal service calls).
-            $journal = AccountingJournal::withoutGlobalScope(\App\Eloquent\CompanyScope::class)
-                ->find($line->accounting_journal_id);
-            if ($journal !== null && ($journal->status === 'posted' || $journal->posted_at !== null)) {
-                throw \Illuminate\Validation\ValidationException::withMessages([
-                    'journal_line' => 'Journal lines belonging to a posted journal are immutable.',
-                ]);
+            $originalJournalId = (int) $line->getOriginal('accounting_journal_id');
+            $currentJournalId = (int) $line->accounting_journal_id;
+
+            self::assertBelongsToDraftJournal($line, $originalJournalId);
+
+            if ($currentJournalId !== $originalJournalId) {
+                self::assertBelongsToDraftJournal($line, $currentJournalId);
             }
+
+            self::assertOwnershipIsConsistent($line);
         });
 
         static::deleting(function (self $line): void {
-            $journal = AccountingJournal::withoutGlobalScope(\App\Eloquent\CompanyScope::class)
+            $journal = AccountingJournal::withoutGlobalScope(CompanyScope::class)
                 ->find($line->accounting_journal_id);
-            if ($journal !== null && ($journal->status === 'posted' || $journal->posted_at !== null)) {
-                throw \Illuminate\Validation\ValidationException::withMessages([
+
+            if ($journal !== null && ($journal->status !== 'draft' || $journal->posted_at !== null)) {
+                throw ValidationException::withMessages([
                     'journal_line' => 'Journal lines belonging to a posted journal cannot be deleted.',
                 ]);
             }
         });
+    }
+
+    private static function assertBelongsToDraftJournal(self $line, int $journalId): void
+    {
+        $journal = AccountingJournal::withoutGlobalScope(CompanyScope::class)->find($journalId);
+
+        if ($journal === null || $journal->status !== 'draft' || $journal->posted_at !== null) {
+            throw ValidationException::withMessages([
+                'journal_line' => 'Journal lines can only be created or edited on a draft journal.',
+            ]);
+        }
+    }
+
+    private static function assertOwnershipIsConsistent(self $line): void
+    {
+        $journal = AccountingJournal::withoutGlobalScope(CompanyScope::class)
+            ->find($line->accounting_journal_id);
+        $account = FinancialAccount::withoutGlobalScope(CompanyScope::class)
+            ->find($line->financial_account_id);
+
+        if (
+            $journal === null
+            || $account === null
+            || (int) $journal->company_id !== (int) $account->company_id
+        ) {
+            throw ValidationException::withMessages([
+                'financial_account_id' => 'The journal line account must belong to the same company as its journal.',
+            ]);
+        }
+
+        foreach ([
+            'party_id' => Party::class,
+            'project_id' => Project::class,
+        ] as $field => $modelClass) {
+            $recordId = $line->{$field};
+
+            if ($recordId === null) {
+                continue;
+            }
+
+            $record = $modelClass::withoutGlobalScope(CompanyScope::class)->find($recordId);
+
+            if ($record === null || (int) $record->company_id !== (int) $journal->company_id) {
+                throw ValidationException::withMessages([
+                    $field => 'The journal line record must belong to the same company as its journal.',
+                ]);
+            }
+        }
     }
 
     protected $fillable = [

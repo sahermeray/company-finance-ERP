@@ -32,6 +32,7 @@ use App\Services\PaymentService;
 use App\Services\PurchaseService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 uses(RefreshDatabase::class);
@@ -636,8 +637,6 @@ it('rejects calculatePartnerLiabilityBalance when the partner has mixed currenci
         'company_id' => $company->id,
         'journal_number' => 'JRN-MIX-1',
         'entry_date' => '2026-10-01',
-        'status' => 'posted',
-        'posted_at' => now(),
     ]);
 
     JournalLine::create([
@@ -662,6 +661,10 @@ it('rejects calculatePartnerLiabilityBalance when the partner has mixed currenci
         'exchange_rate' => '12000',
         'base_currency' => 'SYP',
         'base_credit' => '1200000',
+    ]);
+    DB::table('accounting_journals')->where('id', $journal->id)->update([
+        'status' => 'posted',
+        'posted_at' => now(),
     ]);
 
     // Single-currency sum must throw.
@@ -688,8 +691,6 @@ it('returns per-currency balances via calculatePartnerLiabilityBalanceByCurrency
         'company_id' => $company->id,
         'journal_number' => 'JRN-MIX-2',
         'entry_date' => '2026-10-01',
-        'status' => 'posted',
-        'posted_at' => now(),
     ]);
 
     JournalLine::create([
@@ -714,6 +715,10 @@ it('returns per-currency balances via calculatePartnerLiabilityBalanceByCurrency
         'exchange_rate' => '12000',
         'base_currency' => 'SYP',
         'base_credit' => '1200000',
+    ]);
+    DB::table('accounting_journals')->where('id', $journal->id)->update([
+        'status' => 'posted',
+        'posted_at' => now(),
     ]);
 
     $balances = app(PaymentService::class)->calculatePartnerLiabilityBalanceByCurrency($partner, $dueToPartner);

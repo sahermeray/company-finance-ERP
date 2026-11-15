@@ -69,6 +69,11 @@ class CustomerReturnLine extends Model
         return $this->belongsTo(StockMovement::class, 'stock_movement_id');
     }
 
+    public function product(): BelongsTo
+    {
+        return $this->belongsTo(Product::class);
+    }
+
     private function assertReturnIsDraft(): void
     {
         $status = CustomerReturn::withoutGlobalScope(CompanyScope::class)

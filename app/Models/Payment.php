@@ -2,17 +2,21 @@
 
 namespace App\Models;
 
+use App\Eloquent\CompanyScope;
 use App\Models\Concerns\TenantScoped;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Database\Eloquent\Relations\MorphToMany;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class Payment extends Model
 {
     use TenantScoped;
+
+    private bool $reversalTransitionAuthorized = false;
 
     protected $attributes = [
         'status' => 'posted',
@@ -64,25 +68,45 @@ class Payment extends Model
     public static function booted(): void
     {
         static::updating(function (self $payment): void {
-            if ($payment->getOriginal('status') === 'posted') {
-                $dirty = array_keys($payment->getDirty());
-                // Whitelist: only these fields may change on a posted payment.
-                // 'status' allows the posted→reversed transition.
-                // 'reversed_by_payment_id' links the original to its reversal record.
-                // All other financial fields remain immutable to preserve audit integrity.
-                $allowed = ['status', 'reversed_by_payment_id'];
+            $originalStatus = $payment->getOriginal('status');
 
-                if ($dirty !== [] && array_diff($dirty, $allowed) !== []) {
+            if (
+                $originalStatus !== 'posted'
+                && $originalStatus !== 'reversed'
+                && $payment->isDirty('status')
+                && in_array($payment->status, ['posted', 'reversed'], true)
+            ) {
+                throw ValidationException::withMessages([
+                    'status' => 'Payment status changes to posted or reversed must use the payment workflow.',
+                ]);
+            }
+
+            if (in_array($originalStatus, ['posted', 'reversed'], true)) {
+                $dirty = array_keys($payment->getDirty());
+
+                if (
+                    $originalStatus !== 'posted'
+                    || ! $payment->reversalTransitionAuthorized
+                    || $payment->status !== 'reversed'
+                    || array_diff($dirty, ['status', 'reversed_by_payment_id']) !== []
+                    || $payment->reversed_by_payment_id === null
+                ) {
                     throw ValidationException::withMessages([
                         'payment' => 'Posted payments are immutable. Create a reversal record instead of editing historical financial data.',
                     ]);
                 }
 
-                // Guard: the only allowed status transition from 'posted' is to 'reversed'.
-                // Any other target status (e.g. 'cancelled', 'draft') is rejected.
-                if (in_array('status', $dirty, true) && $payment->status !== 'reversed') {
+                $reversal = self::withoutGlobalScope(CompanyScope::class)
+                    ->find($payment->reversed_by_payment_id);
+
+                if (
+                    $reversal === null
+                    || $reversal->status !== 'posted'
+                    || (int) $reversal->company_id !== (int) $payment->company_id
+                    || (int) $reversal->reversal_of_payment_id !== (int) $payment->getKey()
+                ) {
                     throw ValidationException::withMessages([
-                        'status' => 'A posted payment can only transition to \'reversed\' status.',
+                        'payment' => 'The reversal payment must be posted, linked to this payment, and belong to the same company.',
                     ]);
                 }
             }
@@ -150,5 +174,27 @@ class Payment extends Model
     public function reversedBy(): BelongsTo
     {
         return $this->belongsTo(self::class, 'reversed_by_payment_id');
+    }
+
+    public function markAsReversedBy(self $reversal): void
+    {
+        if (DB::transactionLevel() === 0) {
+            throw new \LogicException('Payments can only be reversed inside a database transaction.');
+        }
+
+        if (
+            $this->status !== 'posted'
+            || $reversal->status !== 'posted'
+            || (int) $reversal->company_id !== (int) $this->company_id
+            || (int) $reversal->reversal_of_payment_id !== (int) $this->getKey()
+        ) {
+            throw ValidationException::withMessages([
+                'payment' => 'The reversal payment must be posted, linked to this payment, and belong to the same company.',
+            ]);
+        }
+
+        $this->reversalTransitionAuthorized = true;
+        $this->status = 'reversed';
+        $this->reversed_by_payment_id = $reversal->getKey();
     }
 }

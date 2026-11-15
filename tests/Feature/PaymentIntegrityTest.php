@@ -732,7 +732,10 @@ it('cannot reverse a generic posted payment that has no posted journal', functio
         $payment = insertPaymentRow($company, $purchase, '250', withPostedJournal: false);
 
         expect(fn () => app(PaymentService::class)->reversePayment($payment, [], $company))
-            ->toThrow(ValidationException::class, 'No posted accounting journal was found for this payment.');
+            ->toThrow(
+                ValidationException::class,
+                'A posted payment must have exactly one associated posted accounting journal before reversal.',
+            );
     });
 });
 

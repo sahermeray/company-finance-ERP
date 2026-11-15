@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use Closure;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 
@@ -24,6 +25,21 @@ class SwitchCompanyRequest extends FormRequest
     {
         return [
             'company_id' => ['required', 'integer'],
+            'return_to' => [
+                'nullable',
+                'string',
+                'max:2048',
+                function (string $attribute, mixed $value, Closure $fail): void {
+                    if (
+                        ! is_string($value)
+                        || ! str_starts_with($value, '/')
+                        || str_starts_with($value, '//')
+                        || str_contains($value, '\\')
+                    ) {
+                        $fail(__('ui.validation.invalid_return_path'));
+                    }
+                },
+            ],
         ];
     }
 }

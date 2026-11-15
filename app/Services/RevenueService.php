@@ -467,6 +467,13 @@ class RevenueService
 
             $this->accounting->postJournal($journal);
 
+            $revenue->receivable_account_id = isset($options['receivable_account_id'])
+                ? (int) $options['receivable_account_id']
+                : null;
+            $revenue->cash_account_id = isset($options['cash_account_id'])
+                ? (int) $options['cash_account_id']
+                : null;
+            $revenue->inventory_asset_account_id = $inventoryAccountId;
             $revenue->status = 'posted';
             $revenue->save();
 

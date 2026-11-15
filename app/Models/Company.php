@@ -75,6 +75,11 @@ class Company extends Model
         return $this->hasMany(FinancialAccount::class);
     }
 
+    public function accountMappings(): HasMany
+    {
+        return $this->hasMany(CompanyAccountMapping::class);
+    }
+
     public function exchangeRates(): HasMany
     {
         return $this->hasMany(ExchangeRate::class);

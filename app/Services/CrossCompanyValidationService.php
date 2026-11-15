@@ -6,8 +6,11 @@ use App\Eloquent\CompanyScope;
 use App\Models\AccountingJournal;
 use App\Models\Attachment;
 use App\Models\AuditLog;
+use App\Models\CompanyAccountMapping;
 use App\Models\ExchangeRate;
 use App\Models\Expense;
+use App\Models\ExpenseLine;
+use App\Models\ExpenseTaxLine;
 use App\Models\FinancialAccount;
 use App\Models\InventoryCutover;
 use App\Models\InventoryCutoverLine;
@@ -38,10 +41,25 @@ class CrossCompanyValidationService
 {
     private const RELATION_MODELS = [
         AccountingJournal::class => ['project_id' => Project::class],
+        CompanyAccountMapping::class => [
+            'financial_account_id' => FinancialAccount::class,
+        ],
         Expense::class => [
             'party_id' => Party::class,
             'project_id' => Project::class,
             'financial_account_id' => FinancialAccount::class,
+            'payment_financial_account_id' => FinancialAccount::class,
+            'payable_account_id' => FinancialAccount::class,
+            'accounting_journal_id' => AccountingJournal::class,
+            'reversal_journal_id' => AccountingJournal::class,
+        ],
+        ExpenseLine::class => [
+            'expense_id' => Expense::class,
+            'expense_account_id' => FinancialAccount::class,
+        ],
+        ExpenseTaxLine::class => [
+            'expense_line_id' => ExpenseLine::class,
+            'tax_asset_account_id' => FinancialAccount::class,
         ],
         FinancialAccount::class => ['parent_account_id' => FinancialAccount::class],
         InventoryCutover::class => [
@@ -72,6 +90,8 @@ class CrossCompanyValidationService
         Project::class => ['party_id' => Party::class],
         Purchase::class => [
             'party_id' => Party::class,
+            'payable_account_id' => FinancialAccount::class,
+            'inventory_asset_account_id' => FinancialAccount::class,
             'project_id' => Project::class,
         ],
         PurchaseItem::class => [
@@ -97,6 +117,9 @@ class CrossCompanyValidationService
         ],
         Revenue::class => [
             'party_id' => Party::class,
+            'receivable_account_id' => FinancialAccount::class,
+            'cash_account_id' => FinancialAccount::class,
+            'inventory_asset_account_id' => FinancialAccount::class,
             'project_id' => Project::class,
         ],
         RevenueItem::class => [
@@ -117,7 +140,9 @@ class CrossCompanyValidationService
         AccountingJournal::class => ['created_by'],
         Attachment::class => ['uploaded_by'],
         AuditLog::class => ['user_id'],
-        Expense::class => ['created_by'],
+        Expense::class => ['created_by', 'approved_by', 'posted_by', 'reversed_by'],
+        ExpenseLine::class => [],
+        ExpenseTaxLine::class => [],
         ExchangeRate::class => ['created_by'],
         InventoryCutover::class => ['created_by'],
         Payment::class => ['created_by'],
@@ -213,12 +238,16 @@ class CrossCompanyValidationService
 
         $parentForeignKey = match ($record::class) {
             JournalLine::class => 'accounting_journal_id',
+            ExpenseLine::class => 'expense_id',
+            ExpenseTaxLine::class => 'expense_line_id',
             PurchaseItem::class => 'purchase_id',
             RevenueItem::class => 'revenue_id',
             default => null,
         };
         $parentModel = match ($record::class) {
             JournalLine::class => AccountingJournal::class,
+            ExpenseLine::class => Expense::class,
+            ExpenseTaxLine::class => ExpenseLine::class,
             PurchaseItem::class => Purchase::class,
             RevenueItem::class => Revenue::class,
             default => null,

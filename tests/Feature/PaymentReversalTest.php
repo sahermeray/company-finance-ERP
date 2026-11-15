@@ -806,7 +806,7 @@ test('reversal journal belongs to the correct company', function (): void {
 });
 
 // ---------------------------------------------------------------------------
-// Test 17: atomic rollback: if reverseJournal fails no reversal payment row remains
+// Test 17: atomic rollback: if payment journal reversal fails no reversal payment row remains
 // ---------------------------------------------------------------------------
 
 test('atomic rollback: if reverseJournal fails no reversal payment row remains', function (): void {
@@ -819,9 +819,9 @@ test('atomic rollback: if reverseJournal fails no reversal payment row remains',
             $ctx['company'], $purchase, $ctx['sypPayable'], $ctx['sypCash'], '5000'
         );
 
-        // Mock AccountingService to throw inside reverseJournal
+        // Mock AccountingService to throw inside the coordinated payment reversal path.
         $mockAccounting = $this->partialMock(AccountingService::class, function ($mock) {
-            $mock->shouldReceive('reverseJournal')
+            $mock->shouldReceive('reversePaymentJournal')
                 ->once()
                 ->andThrow(new RuntimeException('Simulated journal reversal failure'));
         });
@@ -874,12 +874,13 @@ test('reversal payment is not counted in outstanding calculation', function (): 
         // Outstanding fully restored — reversal payment itself does not count against doc
         expect(bccomp($outstandingAfter, $outstandingBefore, 4))->toBe(0);
 
-        // The reversal payment has no payable link
+        // The reversal preserves the original payable relationship but is excluded
+        // from outstanding calculations by its reversal_of_payment_id.
         $reversalPayment = Payment::withoutGlobalScope(CompanyScope::class)
             ->where('reversal_of_payment_id', $payment->id)
             ->firstOrFail();
-        expect($reversalPayment->payable_type)->toBeNull();
-        expect($reversalPayment->payable_id)->toBeNull();
+        expect($reversalPayment->payable_type)->toBe(Purchase::class)
+            ->and((int) $reversalPayment->payable_id)->toBe((int) $purchase->id);
     });
 });
 

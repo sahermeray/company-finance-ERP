@@ -78,7 +78,7 @@ function makePayment(
         'amount' => $amount,
         'currency' => $currency,
         'exchange_rate' => '1',
-        'base_currency' => $currency,
+        'base_currency' => $company->base_currency,
         'base_amount' => $amount,
         'applied_amount' => $appliedAmount,
         'applied_currency' => $appliedCurrency,
@@ -119,14 +119,14 @@ function makePayment(
                 'financial_account_id' => $payableAccount->id,
                 'debit' => $amount,
                 'currency' => $currency,
-                'base_currency' => $currency,
+                'base_currency' => $company->base_currency,
                 'exchange_rate' => '1',
             ]);
             $accounting->addJournalLine($journal, [
                 'financial_account_id' => $cashAccount->id,
                 'credit' => $amount,
                 'currency' => $currency,
-                'base_currency' => $currency,
+                'base_currency' => $company->base_currency,
                 'exchange_rate' => '1',
             ]);
             $accounting->postJournal($journal);
@@ -188,7 +188,7 @@ it('does not reduce outstanding for a draft payment with a posted journal', func
     $company = Company::create(['name' => 'Co C0']);
     $purchase = makePurchase($company, '1000');
     $payment = makePayment($company, $purchase, '400', 'draft');
-    AccountingJournal::create([
+    DB::table('accounting_journals')->insert([
         'company_id' => $company->id,
         'sourceable_type' => Payment::class,
         'sourceable_id' => $payment->id,
@@ -196,6 +196,8 @@ it('does not reduce outstanding for a draft payment with a posted journal', func
         'entry_date' => now()->toDateString(),
         'status' => 'posted',
         'posted_at' => now(),
+        'created_at' => now(),
+        'updated_at' => now(),
     ]);
 
     $service = app(PaymentService::class);
@@ -246,13 +248,15 @@ it('does not reduce outstanding when the only associated journal is reversed', f
     $company = Company::create(['name' => 'Co C2A']);
     $purchase = makePurchase($company, '1000');
     $payment = makePayment($company, $purchase, '400', 'posted', withPostedJournal: false);
-    AccountingJournal::create([
+    DB::table('accounting_journals')->insert([
         'company_id' => $company->id,
         'sourceable_type' => Payment::class,
         'sourceable_id' => $payment->id,
         'journal_number' => 'REVERSED-'.uniqid(),
         'entry_date' => now()->toDateString(),
         'status' => 'reversed',
+        'created_at' => now(),
+        'updated_at' => now(),
     ]);
 
     $service = app(PaymentService::class);

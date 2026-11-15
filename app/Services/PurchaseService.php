@@ -96,8 +96,9 @@ class PurchaseService
             }
         }
 
-        $unit = $attributes['unit_of_measure_id'] !== null
-            ? UnitOfMeasure::query()->find($attributes['unit_of_measure_id'])
+        $unitId = $attributes['unit_of_measure_id'] ?? null;
+        $unit = $unitId !== null
+            ? UnitOfMeasure::query()->find($unitId)
             : $product->unitOfMeasure()->first();
 
         $this->assertUnitCompatible($product, $unit);
@@ -467,6 +468,8 @@ class PurchaseService
                 );
             }
 
+            $lockedPurchase->payable_account_id = $payableAccount->getKey();
+            $lockedPurchase->inventory_asset_account_id = $inventoryAccount?->getKey();
             $lockedPurchase->status = 'posted';
             $lockedPurchase->save();
 

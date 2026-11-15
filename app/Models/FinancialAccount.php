@@ -21,12 +21,21 @@ class FinancialAccount extends Model
         'expense',
     ];
 
+    public const STATEMENT_CLASSIFICATIONS = [
+        'revenue',
+        'cost_of_goods_sold',
+        'operating_expense',
+        'other_income',
+        'other_expense',
+    ];
+
     protected $fillable = [
         'company_id',
         'parent_account_id',
         'code',
         'name',
         'account_type',
+        'statement_classification',
         'currency',
         'description',
         'is_active',
@@ -43,10 +52,12 @@ class FinancialAccount extends Model
     {
         static::creating(function (self $account): void {
             $account->validateAccountType();
+            $account->validateStatementClassification();
         });
 
         static::updating(function (self $account): void {
             $account->validateAccountType();
+            $account->validateStatementClassification();
         });
     }
 
@@ -193,6 +204,31 @@ class FinancialAccount extends Model
         if (! in_array(strtolower((string) $this->account_type), self::VALID_ACCOUNT_TYPES, true)) {
             throw ValidationException::withMessages([
                 'account_type' => 'The account type must be asset, liability, equity, revenue, income, or expense.',
+            ]);
+        }
+    }
+
+    protected function validateStatementClassification(): void
+    {
+        if ($this->statement_classification === null) {
+            return;
+        }
+
+        $classification = (string) $this->statement_classification;
+        $accountType = strtolower((string) $this->account_type);
+        $validClassifications = match ($accountType) {
+            'revenue' => ['revenue', 'other_income'],
+            'income' => ['other_income'],
+            'expense' => ['cost_of_goods_sold', 'operating_expense', 'other_expense'],
+            default => [],
+        };
+
+        if (
+            ! in_array($classification, self::STATEMENT_CLASSIFICATIONS, true)
+            || ! in_array($classification, $validClassifications, true)
+        ) {
+            throw ValidationException::withMessages([
+                'statement_classification' => 'The statement classification must be valid for the account type.',
             ]);
         }
     }

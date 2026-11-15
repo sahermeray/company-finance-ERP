@@ -9,6 +9,7 @@ use App\Models\Company;
 use App\Models\ExchangeRate;
 use App\Models\Expense;
 use App\Models\FinancialAccount;
+use App\Models\InventoryAdjustment;
 use App\Models\JournalLine;
 use App\Models\Party;
 use App\Models\PartyType;
@@ -20,8 +21,11 @@ use App\Models\Purchase;
 use App\Models\PurchaseItem;
 use App\Models\Revenue;
 use App\Models\RevenueItem;
+use App\Models\StockCount;
+use App\Models\StockCountLine;
 use App\Models\StockMovement;
 use App\Models\UnitOfMeasure;
+use App\Models\User;
 use App\Models\Warehouse;
 use App\Policies\CompanyOwnedPolicy;
 use App\Policies\CompanyPolicy;
@@ -29,8 +33,14 @@ use App\Services\AccountingService;
 use App\Services\CompanyContextService;
 use App\Services\PaymentService;
 use App\Services\PurchaseService;
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Support\Str;
+use Illuminate\View\View;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -50,6 +60,28 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        view()->composer(['inventory.*', 'commercial.*'], function (View $view): void {
+            $user = Auth::user();
+            if (! $user instanceof User) {
+                return;
+            }
+
+            $view->with('activeCompany', app(CompanyContextService::class)->requireCurrent())
+                ->with('companies', $user->companies()
+                    ->orderBy('name')
+                    ->orderBy('companies.id')
+                    ->get(['companies.id', 'companies.name', 'companies.base_currency']));
+        });
+
+        RateLimiter::for('login', function (Request $request): array {
+            $email = Str::transliterate(Str::lower($request->string('email')->toString()));
+
+            return [
+                Limit::perMinute(5)->by('login|'.$email.'|'.$request->ip()),
+                Limit::perMinute(30)->by('login-ip|'.$request->ip()),
+            ];
+        });
+
         Gate::policy(Company::class, CompanyPolicy::class);
 
         foreach ([
@@ -59,6 +91,7 @@ class AppServiceProvider extends ServiceProvider
             ExchangeRate::class,
             Expense::class,
             FinancialAccount::class,
+            InventoryAdjustment::class,
             JournalLine::class,
             Party::class,
             PartyType::class,
@@ -71,6 +104,8 @@ class AppServiceProvider extends ServiceProvider
             Revenue::class,
             RevenueItem::class,
             StockMovement::class,
+            StockCount::class,
+            StockCountLine::class,
             UnitOfMeasure::class,
             Warehouse::class,
         ] as $model) {

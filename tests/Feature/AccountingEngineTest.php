@@ -7,6 +7,7 @@ use App\Models\JournalLine;
 use App\Services\AccountingService;
 use App\Services\CompanyContextService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 uses(RefreshDatabase::class);
@@ -302,8 +303,6 @@ it('computes native-currency and base-currency balances separately for a multi-c
             'company_id' => $account->company_id,
             'journal_number' => 'JRN-MIXBAL',
             'entry_date' => '2026-10-10',
-            'status' => 'posted',
-            'posted_at' => now(),
         ]);
 
         JournalLine::create([
@@ -324,6 +323,10 @@ it('computes native-currency and base-currency balances separately for a multi-c
             'currency' => 'USD', 'exchange_rate' => '12000',
             'base_currency' => 'SYP',
             'base_debit' => '12000000', 'base_credit' => '0',
+        ]);
+        DB::table('accounting_journals')->where('id', $journal->id)->update([
+            'status' => 'posted',
+            'posted_at' => now(),
         ]);
 
         $draftJournal = AccountingJournal::create([
@@ -424,7 +427,6 @@ it('excludes draft journal lines from every financial account balance', function
             'company_id' => $cash->company_id,
             'journal_number' => 'JRN-CANCELLED-BALANCE',
             'entry_date' => '2026-10-10',
-            'status' => 'cancelled',
         ]);
         JournalLine::create([
             'accounting_journal_id' => $cancelledJournal->id,
@@ -437,6 +439,9 @@ it('excludes draft journal lines from every financial account balance', function
             'base_currency' => 'SYP',
             'base_debit' => '75',
             'base_credit' => '0',
+        ]);
+        DB::table('accounting_journals')->where('id', $cancelledJournal->id)->update([
+            'status' => 'cancelled',
         ]);
 
         $fresh = $cash->fresh();
@@ -527,8 +532,6 @@ it('agrees across all three balance methods for a single-currency account', func
             'company_id' => $account->company_id,
             'journal_number' => 'JRN-SINGLE',
             'entry_date' => '2026-10-10',
-            'status' => 'posted',
-            'posted_at' => now(),
         ]);
 
         JournalLine::create([
@@ -539,6 +542,10 @@ it('agrees across all three balance methods for a single-currency account', func
             'currency' => 'SYP', 'exchange_rate' => '1',
             'base_currency' => 'SYP',
             'base_debit' => '1500', 'base_credit' => '0',
+        ]);
+        DB::table('accounting_journals')->where('id', $journal->id)->update([
+            'status' => 'posted',
+            'posted_at' => now(),
         ]);
 
         $fresh = $account->fresh();
@@ -561,13 +568,20 @@ it('prevents deleting a posted journal through Eloquent on all engines', functio
     ]);
 
     app(CompanyContextService::class)->runForCompany($company, function () use ($account): void {
-        $journal = AccountingJournal::create([
-            'company_id' => $account->company_id,
+        $service = app(AccountingService::class);
+        $journal = $service->createDraftJournal([
             'journal_number' => 'JRN-DEL',
             'entry_date' => '2026-10-10',
-            'status' => 'posted',
-            'posted_at' => now(),
         ]);
+        $service->addJournalLine($journal, [
+            'financial_account_id' => $account->id,
+            'debit' => '1',
+        ]);
+        $service->addJournalLine($journal, [
+            'financial_account_id' => $account->id,
+            'credit' => '1',
+        ]);
+        $journal = $service->postJournal($journal);
 
         // The Eloquent deleting hook blocks deletion of posted journals on every engine,
         // including SQLite where the FK action remains SET NULL.
