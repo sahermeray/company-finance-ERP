@@ -110,16 +110,22 @@ return [
             [
                 'key' => 'expenses',
                 'label' => 'ui.navigation.expenses',
+                'route' => 'expenses.index',
+                'active' => ['expenses.*'],
                 'icon' => 'expenses',
             ],
             [
                 'key' => 'cash-banks',
                 'label' => 'ui.navigation.cash_banks',
+                'route' => 'cash-bank.index',
+                'active' => ['cash-bank.*'],
                 'icon' => 'cash',
             ],
             [
                 'key' => 'accounting',
                 'label' => 'ui.navigation.accounting',
+                'route' => 'accounting.journals.index',
+                'active' => ['accounting.*'],
                 'icon' => 'accounting',
             ],
             [

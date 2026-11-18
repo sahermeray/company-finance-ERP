@@ -12,7 +12,7 @@ class FinancialAccount extends Model
 {
     use TenantScoped;
 
-    protected const VALID_ACCOUNT_TYPES = [
+    public const VALID_ACCOUNT_TYPES = [
         'asset',
         'liability',
         'equity',

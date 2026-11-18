@@ -340,3 +340,52 @@ document.querySelectorAll('[data-payment-form]').forEach((form) => {
     currency.addEventListener('change', syncPaymentForm);
     syncPaymentForm();
 });
+
+document.querySelectorAll('[data-expense-form]').forEach((form) => {
+    const toggle = form.querySelector('[data-payment-type]');
+    const paidGroup = form.querySelector('[data-paid-account]');
+    const unpaidGroup = form.querySelector('[data-unpaid-account]');
+    const paidSelect = form.querySelector('[data-paid-select]');
+    const unpaidSelect = form.querySelector('[data-unpaid-select]');
+    const sync = () => {
+        const paid = toggle?.value === 'paid';
+        if (paidGroup) paidGroup.hidden = !paid;
+        if (unpaidGroup) unpaidGroup.hidden = paid;
+        if (paidSelect) paidSelect.required = paid;
+        if (unpaidSelect) unpaidSelect.required = !paid;
+    };
+    toggle?.addEventListener('change', sync);
+    sync();
+});
+
+document.querySelectorAll('[data-settle-form]').forEach((form) => {
+    const currency = form.querySelector('[data-settle-currency]');
+    const account = form.querySelector('[data-settle-account]');
+    const amount = form.querySelector('[data-settle-amount]');
+    const fullButton = form.querySelector('[data-settle-full]');
+    const outstanding = form.dataset.settleOutstanding || '0';
+    const filterAccounts = () => {
+        [...account.options].forEach((opt) => {
+            if (!opt.value) {
+                return;
+            }
+            const ok = opt.dataset.currency === currency.value;
+            opt.hidden = !ok;
+            opt.disabled = !ok;
+        });
+        if (account.selectedOptions[0]?.disabled) {
+            account.value = '';
+        }
+    };
+    currency?.addEventListener('change', filterAccounts);
+    filterAccounts();
+    fullButton?.addEventListener('click', () => {
+        if (currency.options.length > 0) {
+            currency.value = currency.options[0].value;
+            filterAccounts();
+        }
+        if (amount) {
+            amount.value = outstanding;
+        }
+    });
+});

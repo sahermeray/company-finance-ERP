@@ -1,9 +1,12 @@
 <?php
 
+use App\Http\Controllers\AccountingJournalController;
 use App\Http\Controllers\AuthenticatedSessionController;
+use App\Http\Controllers\CashBankController;
 use App\Http\Controllers\CompanyContextController;
 use App\Http\Controllers\CompanySelectionController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\ExpenseController;
 use App\Http\Controllers\Inventory\CatalogController;
 use App\Http\Controllers\Inventory\InventoryController;
 use App\Http\Controllers\Inventory\ProductController;
@@ -91,11 +94,37 @@ Route::middleware('auth')->group(function (): void {
         Route::post('/purchases/{purchase}/post', [PurchaseController::class, 'post'])->name('purchases.post');
         Route::get('/purchases/{purchase}/print', [PurchaseController::class, 'print'])->name('purchases.print');
 
+        Route::get('/expenses', [ExpenseController::class, 'index'])->name('expenses.index');
+        Route::get('/expenses/create', [ExpenseController::class, 'create'])->name('expenses.create');
+        Route::post('/expenses', [ExpenseController::class, 'store'])->name('expenses.store');
+        Route::get('/expenses/{expense}', [ExpenseController::class, 'show'])->name('expenses.show');
+        Route::post('/expenses/{expense}/approve', [ExpenseController::class, 'approve'])->name('expenses.approve');
+        Route::post('/expenses/{expense}/post', [ExpenseController::class, 'post'])->name('expenses.post');
+        Route::post('/expenses/{expense}/settle', [ExpenseController::class, 'settle'])->name('expenses.settle');
+        Route::post('/expenses/{expense}/reverse', [ExpenseController::class, 'reverse'])->name('expenses.reverse');
+        Route::delete('/expenses/{expense}', [ExpenseController::class, 'destroy'])->name('expenses.destroy');
+        Route::get('/expenses/{expense}/print', [ExpenseController::class, 'print'])->name('expenses.print');
+
         Route::get('/sales/availability', [SalesController::class, 'availability'])->name('sales.availability');
         Route::resource('sales', SalesController::class)
             ->only(['index', 'create', 'store', 'show'])
             ->parameters(['sales' => 'revenue']);
         Route::post('/sales/{revenue}/post', [SalesController::class, 'post'])->name('sales.post');
         Route::get('/sales/{revenue}/print', [SalesController::class, 'print'])->name('sales.print');
+
+        Route::get('/cash-bank', [CashBankController::class, 'index'])->name('cash-bank.index');
+        Route::get('/cash-bank/create', [CashBankController::class, 'create'])->name('cash-bank.create');
+        Route::post('/cash-bank', [CashBankController::class, 'store'])->name('cash-bank.store');
+        Route::get('/cash-bank/{cashBank}/print', [CashBankController::class, 'print'])->name('cash-bank.print');
+        Route::get('/cash-bank/{cashBank}/edit', [CashBankController::class, 'edit'])->name('cash-bank.edit');
+        Route::put('/cash-bank/{cashBank}', [CashBankController::class, 'update'])->name('cash-bank.update');
+        Route::get('/cash-bank/{cashBank}', [CashBankController::class, 'show'])->name('cash-bank.show');
+
+        Route::prefix('accounting')->name('accounting.')->group(function (): void {
+            Route::get('/journals', [AccountingJournalController::class, 'index'])->name('journals.index');
+            Route::get('/journals/{journal}', [AccountingJournalController::class, 'show'])->name('journals.show');
+            Route::get('/mappings', [AccountingJournalController::class, 'mappings'])->name('mappings');
+            Route::put('/mappings/{purpose}', [AccountingJournalController::class, 'updateMapping'])->name('mappings.update');
+        });
     });
 });
