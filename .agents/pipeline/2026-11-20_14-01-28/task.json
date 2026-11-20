@@ -1,0 +1,7 @@
+{
+  "task_id": "task-phase-8h-financial-reports-ui",
+  "task_description": "Phase 8H: Financial Reports UI — add the HTTP presentation layer (controller, routes, views, navigation, translations, feature tests) for the five financial reports backed by FinancialReportingService.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null
+}

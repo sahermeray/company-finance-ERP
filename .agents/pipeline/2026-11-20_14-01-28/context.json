@@ -1,0 +1,28 @@
+{
+  "project_type": "Laravel 12 / PHP 8.4 monolithic web app with Blade + Tailwind CSS",
+  "language": "PHP 8.4",
+  "build_system": "Composer + npm. No separate compile step for PHP. Frontend assets built with Vite (npm run build). PHP changes take effect immediately in test/CLI context.",
+  "test_framework": "Pest (via php artisan test). Tests live in tests/Feature/ and tests/Unit/. Run via composer test or php artisan test.",
+  "build_command": "php artisan config:clear && php artisan route:list",
+  "test_command": "php artisan config:clear && php artisan test",
+  "verification_instructions": "1) php artisan config:clear (catches PHP parse errors in providers/config). 2) php artisan route:list (catches route binding errors). 3) php artisan test --filter <TestClass> (run specific tests). 4) php artisan test (full suite).",
+  "snapshot_or_generated_files": null,
+  "environment_constraints": "Laravel Herd (macOS). Database is SQLite (tests use RefreshDatabase). Do not run migrations. Do not modify .env.",
+  "contribution_requirements": "No destructive git commands. All new code follows existing conventions. No unrequested refactors.",
+  "key_patterns": "Controllers use app(CompanyContextService::class)->requireCurrent() per-action. View composer in AppServiceProvider::boot() injects $activeCompany and $companies into named view namespaces. Non-print views extend layouts.inventory with @section('page-content'). Print views extend layouts.app with @section('content'). Monetary amounts: number_format((float)$value, 4) wrapped in <bdi dir=\"ltr\">. Zero debit/credit in ledger renders as '—'. Filter forms use method=GET, action='', grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4. Page headers: teal label + h1 + secondary nav row. Nav active state: request()->routeIs(). Tests use Pest it(...) closures with uses(RefreshDatabase::class).",
+  "relevant_files": [
+    "app/Http/Controllers/AccountingJournalController.php",
+    "app/Providers/AppServiceProvider.php",
+    "app/Services/FinancialReportingService.php",
+    "config/navigation.php",
+    "routes/web.php",
+    "lang/en/ui.php",
+    "lang/ar/ui.php",
+    "resources/views/accounting/journals/index.blade.php",
+    "resources/views/commercial/parties/statement-print.blade.php",
+    "tests/Feature/AccountingUiTest.php",
+    "tests/Feature/NavigationTest.php",
+    "tests/Feature/FinancialReportingServiceTest.php"
+  ],
+  "directory_structure": "app/Http/Controllers/ — all controllers flat (no subdirs except Inventory/). app/Services/ — service classes. app/Providers/AppServiceProvider.php — singleton registration + view composer + rate limiters + policies. resources/views/ — Blade views by module (accounting/, commercial/, reports/ to be created). config/navigation.php — sidebar nav config. lang/en/ui.php and lang/ar/ui.php — all UI strings. tests/Feature/ — Pest feature tests."
+}

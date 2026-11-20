@@ -1,0 +1,53 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "id": 1,
+      "severity": "MEDIUM",
+      "title": "Controller constructor injection pattern claim is wrong — AccountingJournalController has no constructor",
+      "location": "Controller section, first paragraph",
+      "description": "The design states the controller follows 'AccountingJournalController pattern exactly: readonly service injection in the constructor.' AccountingJournalController has no constructor at all; it uses app(CompanyContextService::class)->requireCurrent() inline per action. The claim is factually wrong. Constructor injection of FinancialReportingService is a valid choice but must not be described as following the reference controller's pattern.",
+      "fix": "Remove the 'exactly' claim and state explicitly that constructor injection of FinancialReportingService is a deliberate deviation to avoid nine repeated app() calls, while other conventions (inline validate, app() for CompanyContextService, View|RedirectResponse return types) match the reference."
+    },
+    {
+      "id": 2,
+      "severity": "MEDIUM",
+      "title": "gross_margin_percentage has no comparison key — view will produce undefined key error",
+      "location": "Income statement view section — comparison column rendering",
+      "description": "The service's comparison loop iterates ['revenue', 'cost_of_goods_sold', 'gross_profit', 'operating_expenses', 'other_income', 'other_expenses', 'net_profit'] — gross_margin_percentage is absent. When a comparison period is active, $report['metrics']['gross_margin_percentage'] will never have a 'comparison' key. Any view code that accesses $metric['comparison'] unconditionally for all eight metrics will produce a PHP undefined key error on the gross margin row.",
+      "fix": "Explicitly state in the view spec that the gross margin row never renders a comparison column. Guard comparison-column cells with @if(isset($metric['comparison'])) or equivalent."
+    },
+    {
+      "id": 3,
+      "severity": "MEDIUM",
+      "title": "FinancialReportingService singleton registration not addressed in AppServiceProvider changes",
+      "location": "Files to modify table — AppServiceProvider.php entry",
+      "description": "The existing services doing comparable work (AccountingService, PaymentService, PurchaseService) are all registered as singletons. FinancialReportingService is not registered at all. Auto-resolution works correctly here, but the design's AppServiceProvider change only mentions adding 'reports.*' to the view composer. It never addresses whether FinancialReportingService should be a singleton, leaving the implementer to silently diverge from the established convention.",
+      "fix": "Either add $this->app->singleton(FinancialReportingService::class) to AppServiceProvider::register() consistent with the other services, or add an explicit note in the design that it is intentionally not a singleton because it holds no state across requests."
+    },
+    {
+      "id": 4,
+      "severity": "MEDIUM",
+      "title": "Navigation test count update instruction lacks a verification step",
+      "location": "Navigation activation section — NavigationTest update paragraph",
+      "description": "The design instructs the implementer to change toBe(15) to toBe(16) and toBe(3) to toBe(2) based on a static count assumption. The current source confirms 15/3, so the arithmetic is correct now. But there is no instruction to verify the counts before editing — if another change has shifted the counts since this design was written, the test change will introduce a false assertion.",
+      "fix": "Add an instruction: 'Before editing NavigationTest lines 98–99, run php artisan test --filter NavigationTest to confirm the current counts are 15 and 3, then update to 16 and 2.'"
+    },
+    {
+      "id": 5,
+      "severity": "NIT",
+      "title": "AccountingJournalController pattern description is factually incorrect",
+      "location": "Controller section, first paragraph",
+      "description": "AccountingJournalController has no constructor. The phrase 'readonly service injection in the constructor' describes something that does not exist in the reference file.",
+      "fix": "Change the description to: 'following AccountingJournalController conventions: inline $request->validate(), app(CompanyContextService::class)->requireCurrent() per action, explicit View|RedirectResponse return types.'"
+    },
+    {
+      "id": 6,
+      "severity": "NIT",
+      "title": "Error table credits requireCurrent() for the 409 response, but EnsureActiveCompany middleware gets there first",
+      "location": "Error handling table, 'No active company context' row",
+      "description": "EnsureActiveCompany middleware runs before the controller and issues the 409 (and 403). CompanyContextService::requireCurrent() is a secondary safety net that would only fire if the middleware was bypassed. The table incorrectly lists the source as the service method.",
+      "fix": "Update the Source column to 'EnsureActiveCompany middleware (primary); requireCurrent() is a secondary safety net.'"
+    }
+  ]
+}

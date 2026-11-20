@@ -5,6 +5,7 @@ use App\Http\Controllers\AuthenticatedSessionController;
 use App\Http\Controllers\CashBankController;
 use App\Http\Controllers\CompanyContextController;
 use App\Http\Controllers\CompanySelectionController;
+use App\Http\Controllers\CompanySettingsController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ExpenseController;
 use App\Http\Controllers\FinancialReportController;
@@ -126,6 +127,20 @@ Route::middleware('auth')->group(function (): void {
             Route::get('/journals/{journal}', [AccountingJournalController::class, 'show'])->name('journals.show');
             Route::get('/mappings', [AccountingJournalController::class, 'mappings'])->name('mappings');
             Route::put('/mappings/{purpose}', [AccountingJournalController::class, 'updateMapping'])->name('mappings.update');
+        });
+
+        Route::prefix('settings')->name('settings.')->group(function (): void {
+            Route::get('/', [CompanySettingsController::class, 'index'])->name('index');
+            Route::get('/general', [CompanySettingsController::class, 'general'])->name('general');
+            Route::put('/general', [CompanySettingsController::class, 'updateGeneral'])->name('general.update');
+            Route::get('/financial', [CompanySettingsController::class, 'financial'])->name('financial');
+            Route::put('/financial', [CompanySettingsController::class, 'updateFinancial'])->name('financial.update');
+            Route::get('/exchange-rates', [CompanySettingsController::class, 'exchangeRates'])->name('exchange-rates');
+            Route::post('/exchange-rates', [CompanySettingsController::class, 'storeExchangeRate'])->name('exchange-rates.store');
+            Route::get('/forex-accounts', [CompanySettingsController::class, 'forexAccounts'])->name('forex-accounts');
+            Route::put('/forex-accounts/gain', [CompanySettingsController::class, 'updateGainAccount'])->name('forex-accounts.gain');
+            Route::put('/forex-accounts/loss', [CompanySettingsController::class, 'updateLossAccount'])->name('forex-accounts.loss');
+            Route::get('/fiscal-year', [CompanySettingsController::class, 'fiscalYear'])->name('fiscal-year');
         });
 
         Route::prefix('reports')->name('reports.')->group(function (): void {

@@ -95,8 +95,8 @@ it('renders each navigation group once with only implemented destinations linked
         ))->toBe(1);
     }
 
-    expect(substr_count($content, 'data-navigation-status="available"'))->toBe(16)
-        ->and(substr_count($content, 'data-navigation-status="coming-soon"'))->toBe(2);
+    expect(substr_count($content, 'data-navigation-status="available"'))->toBe(17)
+        ->and(substr_count($content, 'data-navigation-status="coming-soon"'))->toBe(1);
 });
 
 it('renders every navigation label in Arabic and English', function (): void {

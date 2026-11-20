@@ -1,0 +1,42 @@
+{
+  "verdict": "PASS",
+  "criteria": [
+    { "id": "AC-1",  "description": "GET /reports returns 200 and lists all five report types",                                                     "result": "PASS", "evidence": "FinancialReportUiTest 'shows the reports index page with five report names' passes; index view contains all 5 report names, descriptions, and route links" },
+    { "id": "AC-2",  "description": "GET /reports/trial-balance with dates returns 200 with account table",                                          "result": "PASS", "evidence": "FinancialReportUiTest 'shows the trial balance with table headings' passes; all 8 balance columns confirmed in view" },
+    { "id": "AC-3",  "description": "GET /reports/trial-balance with invalid date_from redirects with validation error",                             "result": "PASS", "evidence": "FinancialReportUiTest 'redirects trial balance with invalid date_from with validation errors' passes" },
+    { "id": "AC-4",  "description": "GET /reports/general-ledger returns 200 with transaction table",                                                "result": "PASS", "evidence": "FinancialReportUiTest 'shows the general ledger page' passes; account dropdown and bdi-wrapped columns confirmed in view" },
+    { "id": "AC-5",  "description": "GET /reports/general-ledger with foreign account_id returns validation error",                                  "result": "PASS", "evidence": "FinancialReportUiTest 'returns a validation error when account_id does not belong to the company' passes; Rule::exists scoped to company_id in controller" },
+    { "id": "AC-6",  "description": "GET /reports/income-statement returns 200 with all eight P&L metrics",                                         "result": "PASS", "evidence": "FinancialReportUiTest 'shows the income statement with all eight metric labels' passes" },
+    { "id": "AC-7",  "description": "GET /reports/income-statement with both comparison dates returns 200 with comparison column",                   "result": "PASS", "evidence": "FinancialReportUiTest 'shows comparison column heading when both comparison dates are submitted' passes" },
+    { "id": "AC-8",  "description": "GET /reports/income-statement with only comparison_from returns validation error on comparison_to",             "result": "PASS", "evidence": "FinancialReportUiTest 'redirects when only comparison_from is provided without comparison_to' passes" },
+    { "id": "AC-9",  "description": "GET /reports/balance-sheet returns 200 with asset/liability/equity sections and equation status",              "result": "PASS", "evidence": "FinancialReportUiTest 'shows the balance sheet with assets, liabilities, and equity headings' passes; balance status badge confirmed in view" },
+    { "id": "AC-10", "description": "GET /reports/performance-trends returns 200 with monthly breakdown table",                                      "result": "PASS", "evidence": "FinancialReportUiTest 'shows the performance trends monthly table' passes; view iterates months with 6 metric columns" },
+    { "id": "AC-11", "description": "GET /reports/trial-balance/print returns 200 with data-print-document button and no sidebar",                  "result": "PASS", "evidence": "FinancialReportUiTest 'trial balance print page contains the data-print-document button' passes; print view extends layouts.app (no sidebar)" },
+    { "id": "AC-12", "description": "Finance → Reports sidebar link is live, routes to reports.index, not 'Coming soon'",                           "result": "PASS", "evidence": "config/navigation.php has 'route' => 'reports.index' and 'active' => ['reports.*']; NavigationTest covers this entry" },
+    { "id": "AC-13", "description": "Unauthenticated access to any report route redirects to /login",                                               "result": "PASS", "evidence": "FinancialReportUiTest 'redirects unauthenticated users to login' passes" },
+    { "id": "AC-14", "description": "Authenticated user with no active company returns HTTP 409",                                                    "result": "PASS", "evidence": "FinancialReportUiTest 'returns 409 when no active company context is set' passes" },
+    { "id": "AC-15", "description": "All UI strings resolve in both English and Arabic — no raw ui.reports.xxx literals in HTML",                   "result": "PASS", "evidence": "FinancialReportUiTest 'renders without leaving raw ui.reports. translation literals' passes; both lang files verified" },
+    { "id": "AC-16", "description": "Arabic locale renders RTL html tag and numeric amounts in bdi dir=ltr wrappers",                               "result": "PASS", "evidence": "FinancialReportUiTest 'renders RTL direction and bdi tags on Arabic locale' passes; all views use bdi dir=ltr for numbers" },
+    { "id": "AC-17", "description": "FinancialReportUiTest file exists and all its tests pass",                                                      "result": "PASS", "evidence": "File exists at tests/Feature/FinancialReportUiTest.php; 15 tests, 47 assertions, 0 failures" },
+    { "id": "AC-18", "description": "All pre-existing tests continue to pass",                                                                       "result": "PASS", "evidence": "Full suite: 544 tests, 2319 assertions, 0 failures (baseline: 529 / 2271)" }
+  ],
+  "drift": [
+    {
+      "item": "Performance Trends print route absent",
+      "assessment": "Expected — explicitly justified by Assumption A2 in the requirements document. No requirement dropped."
+    },
+    {
+      "item": "Constructor injection in FinancialReportController instead of per-action app() calls",
+      "assessment": "Permitted variation — constructor comment in the controller explains the deliberate choice; NFR-1 permits this pattern. No functional difference."
+    }
+  ],
+  "test_run": {
+    "command": "env APP_ENV=testing DB_CONNECTION=sqlite DB_DATABASE=:memory: DB_URL= ./vendor/bin/pest --no-coverage",
+    "tests": 544,
+    "assertions": 2319,
+    "failures": 0,
+    "exit_code": 0,
+    "baseline_tests": 529,
+    "baseline_assertions": 2271
+  }
+}
