@@ -100,6 +100,19 @@ class PaymentService
 
         $company = $purchase->company ?: $this->companyContext->requireCurrent();
 
+        // Fix 1: Derive party_id from the purchase's supplier when the caller omits it.
+        // The supplier (purchase->party_id) is the creditor — the entity whose payable
+        // journal lines must carry a party_id for per-supplier GL reconciliation.
+        if (! isset($attributes['party_id']) || $attributes['party_id'] === null) {
+            $attributes['party_id'] = $purchase->party_id;
+        } elseif ((int) $attributes['party_id'] !== (int) $purchase->party_id) {
+            // Reject a caller-supplied party_id that conflicts with the purchase's supplier
+            // before any DB writes so no partial records are created.
+            throw ValidationException::withMessages([
+                'party_id' => 'The supplied party_id conflicts with the purchase supplier. Omit party_id or supply the purchase supplier\'s party_id.',
+            ]);
+        }
+
         $payload = array_merge([
             'company_id' => $company->getKey(),
             'payable_type' => Purchase::class,
@@ -913,6 +926,256 @@ class PaymentService
         }
 
         return $result;
+    }
+
+    // -------------------------------------------------------------------------
+    // Public API — supplier payable GL balance (Fix 3)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Calculate the general-ledger payable balance for a specific supplier on a
+     * specific payable account.
+     *
+     * Returns an array:
+     *   'native_balance' => string  credit − debit in the account's native currency,
+     *                               positive = company owes this supplier
+     *   'base_balance'   => string  base_credit − base_debit, positive = company owes
+     *   'currency'       => string  the account's currency code
+     *
+     * Design notes:
+     * - Filters journal lines to: financial_account_id = payableAccount.id,
+     *   party_id = supplier.id, journal.status = 'posted'.
+     * - Respects company isolation: supplier and account must belong to the same company.
+     * - Posted reversal journals are automatically included (they carry status='posted'),
+     *   their debit lines net out the original credit lines, bringing the balance to zero
+     *   when a payment is reversed.
+     * - Lines with NULL party_id (created before Fix 1) are excluded from the per-supplier
+     *   balance. The caller receives only lines explicitly tagged to this supplier.
+     *   reconcileSupplierPayables() reports a warning when untagged lines exist.
+     * - FX gain/loss lines are on separate accounts (expense/income) and are never on
+     *   the payable account, so they do not distort this balance.
+     * - The account is a single-currency account (enforced by postJournal's
+     *   line.currency === account.currency check), so native and base are always
+     *   computed separately; native is in the account's own currency, base is in SYP.
+     *
+     * @throws ValidationException when supplier and account belong to different companies.
+     */
+    public function calculateSupplierPayableBalance(
+        Party $supplier,
+        FinancialAccount $payableAccount,
+    ): array {
+        if ((int) $supplier->company_id !== (int) $payableAccount->company_id) {
+            throw ValidationException::withMessages([
+                'party_id' => 'The supplier and payable account must belong to the same company.',
+            ]);
+        }
+
+        $lines = JournalLine::withoutGlobalScope(CompanyScope::class)
+            ->where('financial_account_id', $payableAccount->getKey())
+            ->where('party_id', $supplier->getKey())
+            ->whereHas('journal', fn ($q) => $q->withoutGlobalScope(CompanyScope::class)->where('status', 'posted'))
+            ->get();
+
+        $totalNativeCredit = '0';
+        $totalNativeDebit  = '0';
+        $totalBaseCredit   = '0';
+        $totalBaseDebit    = '0';
+
+        foreach ($lines as $line) {
+            $totalNativeCredit = bcadd($totalNativeCredit, $this->normalizeAmount((string) ($line->credit ?? '0'), 'credit'), 10);
+            $totalNativeDebit  = bcadd($totalNativeDebit, $this->normalizeAmount((string) ($line->debit ?? '0'), 'debit'), 10);
+            $totalBaseCredit   = bcadd($totalBaseCredit, $this->normalizeAmount((string) ($line->base_credit ?? '0'), 'base_credit'), 10);
+            $totalBaseDebit    = bcadd($totalBaseDebit, $this->normalizeAmount((string) ($line->base_debit ?? '0'), 'base_debit'), 10);
+        }
+
+        // Liability convention: credit increases balance, debit decreases it.
+        // Positive = company owes supplier.
+        $nativeBalance = bcsub($totalNativeCredit, $totalNativeDebit, 10);
+        $baseBalance   = bcsub($totalBaseCredit, $totalBaseDebit, 10);
+
+        return [
+            'native_balance' => $nativeBalance,
+            'base_balance'   => $baseBalance,
+            'currency'       => strtoupper((string) ($payableAccount->currency ?? 'SYP')),
+        ];
+    }
+
+    // -------------------------------------------------------------------------
+    // Public API — diagnostic supplier payables reconciliation (Fix 4)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Compare operational outstanding balances against the GL payable balances
+     * for every supplier (party) with posted purchases in the given company.
+     *
+     * READ-ONLY. This method never posts journals or mutates accounting records.
+     *
+     * FX gain/loss note: Cross-currency supplier payments produce three journal lines:
+     *   1. Dr Supplier Payable (USD, at R₀) — this is on the payable account.
+     *   2. Cr Cash/Bank (SYP) — on the cash account, NOT the payable account.
+     *   3. Dr/Cr Exchange Gain/Loss (SYP) — on the FX account, NOT the payable account.
+     * Therefore the payable account balance is always at R₀ (the original purchase rate),
+     * and FX gain/loss lines never affect this reconciliation. The operational outstanding
+     * is in the purchase's native currency (e.g. USD), so both sides agree at R₀.
+     *
+     * Lines with NULL party_id (pre-Fix 1 data) are excluded from the per-supplier GL
+     * balance; a warning is surfaced when such lines exist on the payable account.
+     *
+     * Returns:
+     * [
+     *   'company_id'   => int,
+     *   'company_name' => string,
+     *   'reconciled'   => bool,
+     *   'suppliers'    => [
+     *     [
+     *       'supplier_id'              => int,
+     *       'supplier_name'            => string,
+     *       'currency'                 => string,
+     *       'operational_outstanding'  => string,
+     *       'gl_balance'               => string,
+     *       'gl_base_balance'          => string,
+     *       'delta'                    => string  (gl_balance − operational_outstanding),
+     *       'status'                   => 'reconciled' | 'mismatch' | 'no_gl_data',
+     *       'warnings'                 => string[],
+     *     ],
+     *     ...
+     *   ],
+     *   'warnings' => string[],
+     * ]
+     */
+    public function reconcileSupplierPayables(Company $company): array
+    {
+        // Collect all posted purchases for this company, grouped by supplier+currency.
+        $purchases = Purchase::withoutGlobalScope(CompanyScope::class)
+            ->where('company_id', $company->getKey())
+            ->where('status', 'posted')
+            ->get();
+
+        // Build a map of [supplier_id][currency] => [purchase, ...]
+        $grouped = [];
+        foreach ($purchases as $purchase) {
+            $supplierId = (int) $purchase->party_id;
+            $currency   = strtoupper((string) ($purchase->currency ?? 'SYP'));
+            $grouped[$supplierId][$currency][] = $purchase;
+        }
+
+        // Find payable accounts for this company: liability accounts.
+        $liabilityAccounts = FinancialAccount::withoutGlobalScope(CompanyScope::class)
+            ->where('company_id', $company->getKey())
+            ->where('account_type', 'liability')
+            ->get()
+            ->groupBy(fn ($a) => strtoupper((string) $a->currency));
+
+        // Count journal lines on payable accounts with NULL party_id — global warning.
+        $payableAccountIds = $liabilityAccounts->flatten()->pluck('id');
+        $nullPartyLineCount = 0;
+        if ($payableAccountIds->isNotEmpty()) {
+            $nullPartyLineCount = JournalLine::withoutGlobalScope(CompanyScope::class)
+                ->whereIn('financial_account_id', $payableAccountIds)
+                ->whereNull('party_id')
+                ->whereHas('journal', fn ($q) => $q->withoutGlobalScope(CompanyScope::class)->where('status', 'posted'))
+                ->count();
+        }
+
+        $globalWarnings = [];
+        if ($nullPartyLineCount > 0) {
+            $globalWarnings[] = "{$nullPartyLineCount} journal lines on payable accounts have NULL party_id — these are excluded from per-supplier GL balances.";
+        }
+
+        $supplierEntries = [];
+        $allReconciled   = true;
+
+        foreach ($grouped as $supplierId => $byCurrency) {
+            $supplier = Party::withoutGlobalScope(CompanyScope::class)->find($supplierId);
+            if ($supplier === null) {
+                continue;
+            }
+
+            foreach ($byCurrency as $currency => $purchasesInCurrency) {
+                $warnings = [];
+
+                // Operational outstanding: sum calculateOutstandingFor() across all purchases
+                // in this currency for this supplier.
+                $operationalOutstanding = '0';
+                foreach ($purchasesInCurrency as $purchase) {
+                    $outstanding = $this->calculateOutstandingFor($purchase);
+                    $operationalOutstanding = bcadd($operationalOutstanding, $outstanding, 10);
+                }
+
+                // GL balance: find the payable account for this currency and query it.
+                $payableAccountsForCurrency = $liabilityAccounts->get($currency, collect());
+                if ($payableAccountsForCurrency->isEmpty()) {
+                    $supplierEntries[] = [
+                        'supplier_id'             => $supplierId,
+                        'supplier_name'           => $supplier->name,
+                        'currency'                => $currency,
+                        'operational_outstanding' => $operationalOutstanding,
+                        'gl_balance'              => '0',
+                        'gl_base_balance'         => '0',
+                        'delta'                   => bcsub('0', $operationalOutstanding, 10),
+                        'status'                  => 'no_gl_data',
+                        'warnings'                => ["No liability account found for currency {$currency}."],
+                    ];
+                    $allReconciled = false;
+                    continue;
+                }
+
+                // If multiple payable accounts exist for this currency, aggregate across all.
+                $glNativeBalance = '0';
+                $glBaseBalance   = '0';
+                $nullLineCount   = 0;
+
+                foreach ($payableAccountsForCurrency as $payableAccount) {
+                    try {
+                        $balanceData     = $this->calculateSupplierPayableBalance($supplier, $payableAccount);
+                        $glNativeBalance = bcadd($glNativeBalance, $balanceData['native_balance'], 10);
+                        $glBaseBalance   = bcadd($glBaseBalance, $balanceData['base_balance'], 10);
+                    } catch (\Throwable $e) {
+                        // If validation fails (e.g. company mismatch), skip this account.
+                    }
+
+                    // Count NULL-party lines on this account for this currency.
+                    $nullLineCount += (int) JournalLine::withoutGlobalScope(CompanyScope::class)
+                        ->where('financial_account_id', $payableAccount->getKey())
+                        ->whereNull('party_id')
+                        ->whereHas('journal', fn ($q) => $q->withoutGlobalScope(CompanyScope::class)->where('status', 'posted'))
+                        ->count();
+                }
+
+                if ($nullLineCount > 0) {
+                    $warnings[] = "party_id missing on {$nullLineCount} payment lines — GL balance may be understated for this supplier.";
+                }
+
+                // Delta: positive = GL shows more owed than operational (over-credit),
+                //        negative = GL shows less owed than operational (under-credit).
+                $delta = bcsub($glNativeBalance, $operationalOutstanding, 10);
+
+                $status = bccomp($delta, '0', 4) === 0 ? 'reconciled' : 'mismatch';
+                if ($status !== 'reconciled') {
+                    $allReconciled = false;
+                }
+
+                $supplierEntries[] = [
+                    'supplier_id'             => $supplierId,
+                    'supplier_name'           => $supplier->name,
+                    'currency'                => $currency,
+                    'operational_outstanding' => $operationalOutstanding,
+                    'gl_balance'              => $glNativeBalance,
+                    'gl_base_balance'         => $glBaseBalance,
+                    'delta'                   => $delta,
+                    'status'                  => $status,
+                    'warnings'                => $warnings,
+                ];
+            }
+        }
+
+        return [
+            'company_id'   => $company->getKey(),
+            'company_name' => $company->name,
+            'reconciled'   => $allReconciled && count($supplierEntries) > 0,
+            'suppliers'    => $supplierEntries,
+            'warnings'     => $globalWarnings,
+        ];
     }
 
     // -------------------------------------------------------------------------
