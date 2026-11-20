@@ -739,5 +739,7 @@ return [
         'base_currency_note' => 'All amounts are in the company base currency (:currency).',
         'warnings_heading' => 'Data quality notices',
         'unresolved_heading' => 'Unresolved items',
+        'incomplete_data_warning' => 'Some data is incomplete. The figures below may not reflect all transactions.',
+        'metric_unavailable' => 'Unavailable',
     ],
 ];

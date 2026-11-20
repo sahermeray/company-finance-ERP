@@ -739,5 +739,7 @@ return [
         'base_currency_note' => 'جميع المبالغ بعملة الشركة الأساسية (:currency).',
         'warnings_heading' => 'ملاحظات جودة البيانات',
         'unresolved_heading' => 'بنود غير محلولة',
+        'incomplete_data_warning' => 'بعض البيانات غير مكتملة. الأرقام الواردة أدناه قد لا تعكس جميع الحركات.',
+        'metric_unavailable' => 'غير متاح',
     ],
 ];
