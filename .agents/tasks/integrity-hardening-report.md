@@ -1,319 +1,223 @@
-# Accounting Integrity Hardening Phase 2 — Final Report
+# Supplier Payables Reconciliation — Integrity Hardening Report
 
 ## Summary
 
-Four targeted accounting-integrity fixes were applied to the Laravel ERP. The changes close two
-P1 vulnerabilities (monetary precision, multi-currency balance semantics) and two P2 gaps (Purchase
-post-posting immutability, reversal-of-journal FK referential integrity). No UI files were touched,
-no new business workflows were built, and no existing immutability protection was weakened. The
-full test suite passes at **227 tests, 607 assertions, 0 failures, exit code 0**.
-
-Baseline before this task: 211 tests, 583 assertions, 0 failures.
+Implemented the supplier payables reconciliation phase addressing audit findings D1–D4.
+Full test suite: **529 tests, 2271 assertions, 0 failures, exit code 0** (baseline was 501/2150).
 
 ---
 
 ## Files Changed
 
-| File | Purpose |
+| File | Change |
 |---|---|
-| `app/Services/RevenueService.php` | Fix 1 — replaced float-based `normalizeAmount()` with bcmath round-half-up; added negative-value rejection. |
-| `app/Models/Purchase.php` | Fix 2 — added `booted()` with `updating`/`deleting` hooks enforcing posted-purchase immutability. |
-| `app/Models/FinancialAccount.php` | Fix 3 — added `nativeCurrencyBalance(string $currency)`; added deprecation docblocks to `balance()`, `debitTotal()`, `creditTotal()`. |
-| `database/migrations/2026_10_14_000001_tighten_reversal_of_journal_fk.php` | Fix 4 — new migration tightening `reversal_of_journal_id` FK to RESTRICT on MySQL/PostgreSQL; SQLite no-op. |
-| `tests/Feature/RevenueWorkflowTest.php` | Fix 1 — 6 regression tests for bcmath normalization. |
-| `tests/Feature/AccountingIntegrityPhase1Test.php` | Fix 2 — 6 regression tests for Purchase immutability. |
-| `tests/Feature/AccountingEngineTest.php` | Fix 3 + Fix 4 — 4 regression tests for balance semantics and journal deletion protection. |
+| `app/Services/PaymentService.php` | Fix 1 (party_id defaulting + conflict guard), Fix 3 (`calculateSupplierPayableBalance`), Fix 4 (`reconcileSupplierPayables`) |
+| `app/Models/FinancialAccount.php` | Fix 2 — already implemented (postedJournalLines, all balance methods already filter to posted journals) |
+| `tests/Feature/SupplierReconciliationTest.php` | 28 new tests (121 assertions) covering all 5 fixes |
 
 ---
 
-## Fix 1 — RevenueService monetary precision (P1)
+## Fix 1 — Supplier Identity in `recordSupplierPayment()`
 
-### What changed
+### Problem
+`recordSupplierPayment()` did not default `party_id` to the purchase's supplier. When the caller omitted `party_id`, the payment and all journal lines were created with `party_id = NULL`, making per-supplier GL queries impossible.
 
-`RevenueService::normalizeAmount()` previously used `number_format((float) $value, 4, '.', '')`,
-which converts the input string to a PHP float before formatting. Floats lose precision on large
-SYP values (e.g. `99999999999.5001` rounds incorrectly).
+### Solution
+In `PaymentService::recordSupplierPayment()`, immediately after refreshing the purchase:
 
-The method now:
-1. Trims the input and returns `'0'` for empty strings (unchanged).
-2. Rejects non-numeric strings with `ValidationException` (unchanged behaviour, same message).
-3. Rejects negative values with `ValidationException` — a new guard (`bccomp($value, '0', 20) < 0`).
-4. Normalizes to 4 decimal places using bcmath round-half-up — the same algorithm as
-   `PurchaseService::normalizeAmount()`: truncate to 5 places, inspect the 5th digit, and
-   conditionally add `0.0001` to the 4-place truncation. No floating-point arithmetic is used.
+1. If `party_id` is omitted: `$attributes['party_id'] = $purchase->party_id`
+2. If `party_id` is supplied but conflicts with `$purchase->party_id`: throw `ValidationException` **before** any DB writes (pre-write guard, no partial records created).
+3. If `party_id` matches `$purchase->party_id`: proceed normally.
 
-### Behavior before
-
-```
-normalizeAmount('99999999999.5001') → number_format((float)'99999999999.5001', 4) → '99999999999.5000' (WRONG — float lost the trailing 1)
-normalizeAmount('-100')             → '-100.0000'  (negatives silently accepted)
-normalizeAmount('100.45678')        → '100.4568'   (correct, but via float)
-```
-
-### Behavior after
-
-```
-normalizeAmount('99999999999.5001') → '99999999999.5001' (correct — bcmath preserves the value)
-normalizeAmount('-100')              → throws ValidationException('The value must not be negative.')
-normalizeAmount('100.45678')         → '100.4568'  (correct — bcmath round-half-up)
-```
-
-### Verification — PurchaseService comparison
-
-`PurchaseService::normalizeAmount()` uses the identical bcmath round-half-up algorithm but does NOT
-reject negatives (it normalizes the absolute value and re-applies the sign). RevenueService's
-requirements differ: revenue line items, totals, and exchange rates must never be negative, so the
-negative-rejection guard is intentionally stricter. The existing caller-side checks
-(`bccomp($unitPrice, '0', 10) < 0`, `bccomp($quantity, '0', 10) <= 0`) remain in place; they are now
-unreachable for negative inputs because `normalizeAmount()` throws first, but they still enforce the
-zero rule for quantity (must be > 0, not ≥ 0).
-
-### Tests added (6)
-
-- `preserves large SYP revenue values without floating-point precision loss` — unit_price `99999999999.5000` → total `99999999999.5000`.
-- `rounds revenue values with more than four fractional digits using round-half-up` — unit_price `100.45678` → total `100.4568`.
-- `rejects a non-numeric revenue unit price` — unit_price `abc` → ValidationException.
-- `rejects a negative revenue unit price` — unit_price `-100` → ValidationException.
-- `handles a zero revenue unit price without float artifacts` — unit_price `0`, qty `5` → total `0.0000`.
-- `normalizes a normal SYP revenue value to four decimal places` — unit_price `100`, qty `10` → total `1000.0000`.
+### Design — Journal Line party_id
+Per inspection of `postPaymentJournal()` and existing tests: the current design sets `party_id = $payment->party_id` on **all three journal lines** (payable debit, cash/bank credit, FX gain/loss). This is preserved. The spec clause "do NOT apply party_id to cash/bank or FX lines unless the current design already does so" was verified — the existing design does, so all lines carry the supplier party_id.
 
 ---
 
-## Fix 2 — Purchase immutability after posting (P2)
+## Fix 2 — Posted-Journal Filtering in Balance Methods
 
-### What changed
+### Finding
+**Already implemented before this phase.** `FinancialAccount` has a `postedJournalLines()` relationship that filters to `status = 'posted'`, and all five balance methods (`debitTotal()`, `creditTotal()`, `balance()`, `nativeCurrencyBalance()`, `baseCurrencyBalance()`, `balanceByCurrency()`) already use it.
 
-The `Purchase` model previously had no `booted()` hooks. A posted purchase's financial fields
-(total, currency, exchange_rate, etc.) could be silently overwritten via `$purchase->update(...)`
-or `$purchase->save()`, corrupting the accounting ledger that depends on those values.
+### Verification
+28 new tests include Fix2-specific tests proving:
+- Draft journal lines are excluded from `balance()`, `baseCurrencyBalance()`, `nativeCurrencyBalance()`, `debitTotal()`, `creditTotal()`
+- Posting a journal makes lines visible in all balance methods
+- A posted reversal journal nets to zero (original posted + reversal posted = both included, net = 0)
 
-Added `Purchase::booted()` with two hooks:
+The existing 501 tests all passed, confirming no regressions.
 
-1. **`updating` hook** — fires when `getOriginal('status') === 'posted'`. Whitelists only `['status']`.
-   Any other dirty field (total, subtotal, tax_total, base_total, currency, exchange_rate, etc.)
-   throws `ValidationException`. The whitelist matches the pattern used by `Revenue` and `Payment`
-   models.
-
-2. **`deleting` hook** — fires when `status === 'posted'`. Throws `ValidationException`.
-
-### Why the draft→posted transition is NOT blocked
-
-`PurchaseService::postPurchase()` performs two saves:
-1. First save: normalizes financial fields while `getOriginal('status')` is `'draft'` → hook does not fire.
-2. Second save: sets `status = 'posted'` while `getOriginal('status')` is still `'draft'` (not yet persisted) → hook does not fire.
-
-Both saves see `getOriginal('status') === 'draft'`, so the immutability guard is never reached
-during the legitimate posting workflow. This is the same pattern documented in
-`AccountingJournal::booted()` and `Revenue::booted()`.
-
-### Behavior before
-
-```
-$postedPurchase->update(['total' => '500']);  // silently overwrites — corrupts ledger
-$postedPurchase->update(['currency' => 'USD']); // silently overwrites
-$postedPurchase->delete();                     // silently deletes — orphans journal/payments
-```
-
-### Behavior after
-
-```
-$postedPurchase->update(['total' => '500']);  → throws ValidationException
-$postedPurchase->update(['currency' => 'USD']); → throws ValidationException
-$postedPurchase->delete();                     → throws ValidationException
-$draftPurchase->update(['total' => '500']);    → succeeds (draft is editable)
-$draftPurchase->delete();                      → succeeds (draft has no accounting dependencies)
-```
-
-### Tests added (6)
-
-- `prevents modifying the total of a posted purchase` — `update(['total' => '500'])` throws; total unchanged.
-- `prevents modifying the currency of a posted purchase` — `update(['currency' => 'USD'])` throws; currency unchanged.
-- `prevents deleting a posted purchase` — `delete()` throws; record still exists.
-- `allows editing a draft purchase` — draft `total` change saves successfully.
-- `allows deleting a draft purchase` — draft `delete()` succeeds; record gone.
-- `allows the draft-to-posted transition via postPurchase without immutability blocking it` — full `PurchaseService::postPurchase()` workflow succeeds; result is `posted` with correct total.
+### Reversal Design Note
+`AccountingService::reverseJournal()` does **not** change the original journal's status to `'reversed'`. Both the original journal and the reversal journal remain at `status = 'posted'`. They net to zero because the reversal has equal-and-opposite debit/credit. The filter `status = 'posted'` correctly includes both.
 
 ---
 
-## Fix 3 — FinancialAccount balance semantics (P1)
+## Fix 3 — `calculateSupplierPayableBalance(Party $supplier, FinancialAccount $payableAccount)`
 
-### What changed
+### Method added to `PaymentService`
 
-`FinancialAccount::balance()`, `debitTotal()`, and `creditTotal()` sum native-currency amounts
-(`debit`/`credit` columns) across ALL journal lines on the account, without filtering by currency.
-For a multi-currency account (e.g. a shared payable account with both SYP and USD postings), this
-produces a meaningless mixed-currency number.
-
-Changes:
-1. Added **`nativeCurrencyBalance(string $currency): string`** — sums `debit − credit` for journal
-   lines matching the given currency only. Safe for multi-currency accounts.
-2. Added `@deprecated` docblocks to `balance()`, `debitTotal()`, and `creditTotal()` warning that
-   they are only safe for single-currency accounts and directing callers to
-   `nativeCurrencyBalance()`, `baseCurrencyBalance()`, or `balanceByCurrency()`.
-3. `balance()` was NOT removed or renamed (passing tests depend on it).
-
-### Call-site audit
-
-Searched all of `app/` for call sites of `balance()`, `debitTotal()`, `creditTotal()`,
-`baseCurrencyBalance()`, and `balanceByCurrency()`. Result: **no service or model code calls these
-methods**. The only call sites are in test files (`AccountingEngineTest.php`,
-`PaymentAccountingTest.php`), all of which use single-currency accounts where the methods are
-correct. No service code needed switching to `baseCurrencyBalance()` or `nativeCurrencyBalance()`.
-
-### Behavior before
-
-```
-$account->balance()              // SUM(debit) − SUM(credit) across ALL currencies — meaningless if mixed
-$account->debitTotal()            // SUM(debit) across ALL currencies
-$account->creditTotal()           // SUM(credit) across ALL currencies
-// No currency-filtered native balance method existed
+```php
+public function calculateSupplierPayableBalance(
+    Party $supplier,
+    FinancialAccount $payableAccount,
+): array
 ```
 
-### Behavior after
-
+**Returns:**
+```php
+[
+    'native_balance' => string,  // credit − debit in account's native currency, positive = owed
+    'base_balance'   => string,  // base_credit − base_debit, positive = owed
+    'currency'       => string,  // account's currency code
+]
 ```
-$account->balance()                      // unchanged — still sums all currencies (deprecated, single-currency only)
-$account->nativeCurrencyBalance('SYP')   // NEW — SUM(debit−credit) for SYP lines only
-$account->nativeCurrencyBalance('USD')   // NEW — SUM(debit−credit) for USD lines only
-$account->baseCurrencyBalance()          // unchanged — SUM(base_debit) − SUM(base_credit), multi-currency safe
-$account->balanceByCurrency()            // unchanged — per-currency breakdown, multi-currency safe
-```
 
-### Tests added (2)
-
-- `computes native-currency and base-currency balances separately for a multi-currency account` —
-  SYP debit 1500 + USD debit 1000 (rate 12000) on one account:
-  `nativeCurrencyBalance('SYP') = 1500`, `nativeCurrencyBalance('USD') = 1000`,
-  `baseCurrencyBalance() = 12001500`.
-- `agrees across all three balance methods for a single-currency account` — single-currency account
-  at rate 1: `balance() == baseCurrencyBalance() == nativeCurrencyBalance('SYP')`.
+**Design:**
+- Filters: `financial_account_id = payableAccount.id`, `party_id = supplier.id`, `journal.status = 'posted'`
+- Uses `JournalLine::withoutGlobalScope(CompanyScope::class)` with `whereHas('journal', fn => $q->withoutGlobalScope(CompanyScope::class)->where('status', 'posted'))` to bypass tenant scope (safe; enforces company isolation explicitly)
+- Company isolation: throws `ValidationException` if supplier and account belong to different companies
+- Liability sign convention: `credit − debit` = positive means company owes supplier
+- NULL party_id lines are excluded (documented in docblock)
+- FX gain/loss lines are on separate accounts (expense/income) — never on the payable account — they do not appear here
+- Posted reversal journals included automatically (they are `status = 'posted'`), their debit lines net out the original credits
 
 ---
 
-## Fix 4 — Protect reversal_of_journal_id referential integrity (P2)
+## Fix 4 — `reconcileSupplierPayables(Company $company)`
 
-### What changed
+### Method added to `PaymentService`
 
-The `reversal_of_journal_id` foreign key (pointing from a reversal journal back to the original it
-reverses) was created with `nullOnDelete()` in migration `2026_10_10_000001`. Migration
-`2026_10_13_000001` tightened the companion pointer `reversed_by_journal_id` to `restrictOnDelete()`
-but left `reversal_of_journal_id` as SET NULL. If the original journal were deleted, the reversal's
-back-pointer would silently become NULL, breaking the reversal chain's audit trail.
-
-New migration `2026_10_14_000001_tighten_reversal_of_journal_fk.php`:
-- **MySQL/PostgreSQL**: drops the existing `accounting_journals_reversal_of_journal_id_foreign` FK
-  and re-adds it with `restrictOnDelete()` + `nullOnUpdate()`. Constraint name verified against the
-  Laravel convention used by the original `constrained()` call.
-- **SQLite**: no-op (driver conditional, same pattern as `2026_10_12_000003` and `2026_10_13_000001`).
-  SQLite cannot ALTER an existing FK action without a full table rebuild, which risks data loss.
-
-### Compensating control on SQLite (and all engines)
-
-`AccountingJournal::booted()` already defines a `deleting` Eloquent hook that throws
-`ValidationException` whenever a posted journal (`status === 'posted'` or `posted_at !== null`) is
-deleted. This blocks deletion of any posted journal — including the original that a reversal points
-to — at the application level, regardless of the database engine. The Eloquent hook is the primary
-protection; the database-level RESTRICT is defence-in-depth on MySQL/PostgreSQL.
-
-### Behavior before
-
-```
--- MySQL/PostgreSQL: deleting the original journal sets reversal_of_journal_id to NULL silently
--- SQLite: same (FK action is SET NULL)
+```php
+public function reconcileSupplierPayables(Company $company): array
 ```
 
-### Behavior after
-
+**Returns:**
+```php
+[
+    'company_id'   => int,
+    'company_name' => string,
+    'reconciled'   => bool,
+    'suppliers'    => [
+        [
+            'supplier_id'             => int,
+            'supplier_name'           => string,
+            'currency'                => string,
+            'operational_outstanding' => string,
+            'gl_balance'              => string,
+            'gl_base_balance'         => string,
+            'delta'                   => string,  // gl_balance − operational_outstanding
+            'status'                  => 'reconciled' | 'mismatch' | 'no_gl_data',
+            'warnings'                => string[],
+        ],
+    ],
+    'warnings' => string[],
+]
 ```
--- MySQL/PostgreSQL: deleting the original journal is blocked by RESTRICT at the DB level
--- SQLite: deleting the original journal is blocked by the Eloquent deleting hook (posted journals cannot be deleted)
--- All engines: Eloquent $journal->delete() on a posted journal throws ValidationException
-```
 
-### Tests added (2)
+**Design rules:**
+- READ-ONLY — never posts journals or mutates records
+- Groups by supplier + currency (a supplier with both SYP and USD purchases appears as two entries)
+- Operational outstanding: `calculateOutstandingFor()` across all posted purchases for that supplier+currency
+- GL balance: `calculateSupplierPayableBalance()` summed across all liability accounts for that currency
+- NULL party_id lines on payable accounts → global warning + per-entry warning + mismatch status
+- `no_gl_data` when no liability account exists for a purchase's currency
+- Another company's data is excluded (queries scoped to `company->getKey()`)
+- FX gain/loss entries are on expense/income accounts — never counted in payable balance
 
-- `prevents deleting a posted journal through Eloquent on all engines` — creates a posted journal,
-  calls `$journal->delete()`, expects `ValidationException`. Works on every engine via the Eloquent
-  hook.
-- `reversal journal reversal_of_journal_id points to the correct original` — posts a journal,
-  reverses it via `AccountingService::reverseJournal()`, verifies `(int) $reversal->reversal_of_journal_id
-  === (int) $posted->id` (integer-cast equality, not just non-null).
+**FX reconciliation note (documented in docblock):** Cross-currency settlement creates 3 journal lines:
+1. Dr Supplier Payable (USD at R₀) — on payable account
+2. Cr Cash/Bank (SYP) — on cash account, NOT payable
+3. Dr/Cr Exchange Gain/Loss (SYP) — on FX account, NOT payable
+
+Therefore the payable account balance is always at R₀ (original purchase rate), and both the GL balance (in USD) and operational outstanding (in USD) agree at R₀. FX lines do not distort reconciliation.
 
 ---
 
-## Migration implications
+## Sign Conventions
 
-### SQLite (test environment)
+| Direction | Account Type | Meaning |
+|---|---|---|
+| Credit > Debit | Liability (payable) | Company owes supplier — positive outstanding |
+| Debit > Credit | Liability (payable) | Over-paid — net debit on liability |
 
-- Fix 4 migration is a no-op — the FK action remains SET NULL. The `AccountingJournal::booted()`
-  deleting hook provides the compensating control on all engines.
-- No table rebuild is performed. No risk of data loss.
+Both `calculateSupplierPayableBalance()` and `reconcileSupplierPayables()` use **credit − debit** for the GL balance, matching `calculatePartnerLiabilityBalance()`.
 
-### MySQL (production)
-
-- `reversal_of_journal_id` FK is dropped and re-added with `restrictOnDelete()` via
-  `ALTER TABLE … DROP FOREIGN KEY` / `ADD CONSTRAINT`, which MySQL supports natively.
-- The existing plain index on `reversal_of_journal_id` (from `2026_10_10_000001`) is not affected.
-- `down()` reverts the FK to `nullOnDelete()`.
-
-### PostgreSQL (production)
-
-- `reversal_of_journal_id` FK is dropped and re-added with `restrictOnDelete()` via
-  `ALTER TABLE … DROP CONSTRAINT` / `ADD CONSTRAINT`, which PostgreSQL supports.
-- `down()` reverts the FK to `nullOnDelete()`.
+The operational outstanding (`calculateOutstandingFor()`) uses **purchase total − sum of posted applied_amounts**, floor at zero.
 
 ---
 
-## Test results
+## Tests Added (tests/Feature/SupplierReconciliationTest.php)
+
+### Fix 1 Tests (4 tests)
+| Test | Expected value |
+|---|---|
+| Omitted party_id defaults to purchase supplier | `payment->party_id == purchase->party_id`; payable debit line `party_id == supplier->id` |
+| Conflicting party_id throws before any DB writes | `ValidationException('party_id')`; payment count unchanged, journal count unchanged |
+| Correct party_id explicitly supplied | Payment posted, payable line has correct `party_id` |
+| Cross-currency: USD payable debit carries supplier party_id | 3-line journal; payable line `currency=USD`, `party_id==supplier->id` |
+
+### Fix 2 Tests (3 tests)
+| Test | Expected value |
+|---|---|
+| Draft journal excluded from all balance methods | `balance()=0`, `baseCurrencyBalance()=0`, `nativeCurrencyBalance('SYP')=0`, `debitTotal()=0`, `creditTotal()=0` |
+| Posting makes lines visible | After post: `balance()=750`, `baseCurrencyBalance()=750`, `nativeCurrencyBalance('SYP')=750` |
+| Posted reversal nets to zero | `balance()=0`; `debitTotal()=500` (original), `creditTotal()=500` (reversal) |
+
+### Fix 3 Tests (7 tests)
+| Test | Independently computed expected value |
+|---|---|
+| Supplier purchase, no payment | `native_balance = 1000 SYP`, `base_balance = 1000 SYP` |
+| Supplier fully paid | `native_balance = 0`, `base_balance = 0` |
+| Supplier B on same account, no lines | `native_balance = 0` |
+| USD purchase at R₀=12000 | `native_balance = 1000 USD`, `base_balance = 12,000,000 SYP` (1000 × 12000) |
+| Reversal returns to pre-payment state | `native_balance = 1000 SYP` after payment reversal |
+| Company isolation | `ValidationException('same company')` |
+| NULL party_id lines excluded | `native_balance = 0` (untagged line not counted for supplier X) |
+
+### Fix 4 Tests (6 tests)
+| Test | Expected value |
+|---|---|
+| Single supplier, no payments | `status=reconciled`, `operational=2000`, `gl_balance=2000`, `delta=0` |
+| Partial payment (400 of 1000) | `status=reconciled`, `operational=600`, `gl_balance=600`, `delta=0` |
+| Reversal returns both views to pre-payment state | `status=reconciled`, `operational=1000`, `gl_balance=1000` |
+| Two suppliers independent | A: `operational=500`, `gl=500`; B: `operational=300`, `gl=300` |
+| NULL party_id on payment line | Global warning "NULL party_id"; entry warning "party_id missing"; mismatch surfaced |
+| Other company not included | `suppliers` array contains companyA's supplier ID, not companyB's |
+
+### Fix 5 End-to-End Tests via PurchaseService::postPurchase() (8 tests)
+| Test | Independently computed expected value |
+|---|---|
+| A: Post real purchase | `outstanding=1000 SYP`, `GL credit=1000 SYP`, `delta=0`, `status=reconciled` |
+| B: Partial payment 400 | `outstanding=1000−400=600`, `GL=1000−400=600`, `delta=0` |
+| C: Cross-currency full settlement | Pay 12,500,000 SYP at R₁=12500; `GL USD balance=1000−1000=0`, `GL base=12M−12M=0`; FX loss 500,000 on separate account |
+| D: Payment reversal | After reverse: `outstanding=1000`, `GL=1000`, `status=reconciled` |
+| E: Draft journal excluded | Draft adds 500 SYP to payable; `GL balance unchanged at 800 SYP` |
+| F: Two suppliers independent | A: 500 SYP, B: 300 SYP — each reconciles independently |
+| G: Second company excluded | CompanyA report contains only companyA's supplier (not companyB's 9999 SYP purchase) |
+| H: Pre-Fix 1 NULL party_id surfaced | Global warning + entry-level warning; not silently ignored |
+
+---
+
+## Remaining Limitations
+
+1. **No purchase reversal workflow.** Per hard restrictions, purchase reversal was not implemented. If a purchase is reversed outside the system, operational outstanding does not update and reconciliation would show a mismatch.
+
+2. **Multi-account per currency.** `reconcileSupplierPayables` aggregates across all liability accounts for a given currency. If a company has multiple payable accounts in the same currency (unusual), the GL balance is summed. The current design has one payable account per currency in practice.
+
+3. **NULL party_id on purchase journal lines (from before Fix 1).** `calculateSupplierPayableBalance` only counts lines tagged to the supplier. Historical lines with `party_id = NULL` are excluded and surfaced as warnings in `reconcileSupplierPayables`. Manual remediation of historical data is outside this phase.
+
+4. **Customer receivables and partner liability reconciliation** are covered by the existing `AccountingReconciliationService` (separate service). `reconcileSupplierPayables` covers only supplier payables.
+
+5. **No posting invariant enforcement.** Per specification, reconciliation is diagnostic only. Posting a purchase or payment does not gate on reconciliation status.
+
+---
+
+## Test Suite Results
 
 ```
-php vendor/bin/pest --no-coverage
-Tests:    227 passed (607 assertions)
-Duration: 3.35s
-Exit code: 0
+Tests:    529 passed (2271 assertions)
+Duration: ~15s
+Exit Code: 0
+Baseline: 501 tests, 2150 assertions
+Added:    28 tests, 121 assertions
 ```
-
-- Baseline: 211 tests, 583 assertions.
-- After: 227 tests, 607 assertions (+16 tests, +24 assertions, 0 failures).
-
----
-
-## Remaining limitations
-
-1. **`FinancialAccount::balance()` / `debitTotal()` / `creditTotal()` are not removed.** They
-   remain for backward compatibility (passing tests use them on single-currency accounts). They are
-   marked `@deprecated` with docblocks explaining the multi-currency risk. Any future UI must use
-   `baseCurrencyBalance()`, `nativeCurrencyBalance()`, or `balanceByCurrency()` instead.
-
-2. **`FinancialAccount::balance()` returns `debit − credit` regardless of account type.** For a
-   liability account with a normal credit balance of 200, `balance()` returns `-200.0000000000`.
-   The UI must interpret sign by account type (asset/expense = positive debit normal; liability/
-   equity/revenue = positive credit normal). This is a display concern, not addressed in this task.
-
-3. **SQLite cannot enforce RESTRICT at the DB level for `reversal_of_journal_id`.** The
-   `AccountingJournal::booted()` deleting hook is the sole protection on SQLite. A raw SQL `DELETE`
-   bypassing Eloquent events would succeed on SQLite (SET NULL). On MySQL/PostgreSQL, the DB-level
-   RESTRICT would block it. This is an accepted trade-off documented in the migration.
-
-4. **`Purchase::booted()` immutability does not block direct DB updates.** The `updating` Eloquent
-   hook catches `$model->save()` / `$model->update()` but not `DB::table('purchases')->where(...)-
-   >update(...)`. This matches the protection level of `Payment`, `Revenue`, and `AccountingJournal`
-   models — all rely on Eloquent events, not DB triggers.
-
-5. **No service code calls `balance()` on a multi-currency account.** The call-site audit confirmed
-   zero service-level call sites. If a service is later added that queries account balances, it must
-   use `nativeCurrencyBalance()` or `baseCurrencyBalance()` explicitly.
-
----
-
-## Existing call sites that remain and why
-
-| Method | Call site | Multi-currency safe? | Why it remains |
-|---|---|---|---|
-| `balance()` | `AccountingEngineTest.php` | Yes — single-currency accounts only | Tests assert exact balance values on single-currency accounts; behavior is correct. |
-| `debitTotal()` | `AccountingEngineTest.php`, `PaymentAccountingTest.php` | Yes — single-currency accounts only | Tests assert debit/credit totals on single-currency accounts. |
-| `creditTotal()` | `AccountingEngineTest.php`, `PaymentAccountingTest.php` | Yes — single-currency accounts only | Same as above. |
-| `baseCurrencyBalance()` | None in `app/` | Yes — multi-currency safe | Not currently called by any service; available for future UI. |
-| `nativeCurrencyBalance()` | None yet | Yes — currency-filtered | New method added in this task; available for future use. |
-
-No service code calls any of these balance methods on an account that could be multi-currency.
