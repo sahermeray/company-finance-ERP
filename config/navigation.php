@@ -131,6 +131,8 @@ return [
             [
                 'key' => 'reports',
                 'label' => 'ui.navigation.reports',
+                'route' => 'reports.index',
+                'active' => ['reports.*'],
                 'icon' => 'reports',
             ],
         ],

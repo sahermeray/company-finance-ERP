@@ -31,6 +31,7 @@ use App\Policies\CompanyOwnedPolicy;
 use App\Policies\CompanyPolicy;
 use App\Services\AccountingService;
 use App\Services\CompanyContextService;
+use App\Services\FinancialReportingService;
 use App\Services\PaymentService;
 use App\Services\PurchaseService;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -53,6 +54,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(AccountingService::class);
         $this->app->singleton(PaymentService::class);
         $this->app->singleton(PurchaseService::class);
+        $this->app->singleton(FinancialReportingService::class);
     }
 
     /**
@@ -60,7 +62,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        view()->composer(['inventory.*', 'commercial.*', 'cash-bank.*', 'accounting.*'], function (View $view): void {
+        view()->composer(['inventory.*', 'commercial.*', 'cash-bank.*', 'accounting.*', 'reports.*'], function (View $view): void {
             $user = Auth::user();
             if (! $user instanceof User) {
                 return;

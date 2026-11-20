@@ -7,6 +7,7 @@ use App\Http\Controllers\CompanyContextController;
 use App\Http\Controllers\CompanySelectionController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ExpenseController;
+use App\Http\Controllers\FinancialReportController;
 use App\Http\Controllers\Inventory\CatalogController;
 use App\Http\Controllers\Inventory\InventoryController;
 use App\Http\Controllers\Inventory\ProductController;
@@ -125,6 +126,19 @@ Route::middleware('auth')->group(function (): void {
             Route::get('/journals/{journal}', [AccountingJournalController::class, 'show'])->name('journals.show');
             Route::get('/mappings', [AccountingJournalController::class, 'mappings'])->name('mappings');
             Route::put('/mappings/{purpose}', [AccountingJournalController::class, 'updateMapping'])->name('mappings.update');
+        });
+
+        Route::prefix('reports')->name('reports.')->group(function (): void {
+            Route::get('/', [FinancialReportController::class, 'index'])->name('index');
+            Route::get('/trial-balance/print', [FinancialReportController::class, 'printTrialBalance'])->name('trial-balance.print');
+            Route::get('/trial-balance', [FinancialReportController::class, 'trialBalance'])->name('trial-balance');
+            Route::get('/general-ledger/print', [FinancialReportController::class, 'printGeneralLedger'])->name('general-ledger.print');
+            Route::get('/general-ledger', [FinancialReportController::class, 'generalLedger'])->name('general-ledger');
+            Route::get('/income-statement/print', [FinancialReportController::class, 'printIncomeStatement'])->name('income-statement.print');
+            Route::get('/income-statement', [FinancialReportController::class, 'incomeStatement'])->name('income-statement');
+            Route::get('/balance-sheet/print', [FinancialReportController::class, 'printBalanceSheet'])->name('balance-sheet.print');
+            Route::get('/balance-sheet', [FinancialReportController::class, 'balanceSheet'])->name('balance-sheet');
+            Route::get('/performance-trends', [FinancialReportController::class, 'performanceTrends'])->name('performance-trends');
         });
     });
 });

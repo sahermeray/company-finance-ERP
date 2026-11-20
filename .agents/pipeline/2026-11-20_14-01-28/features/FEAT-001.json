@@ -1,0 +1,31 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Backend wiring: register FinancialReportingService singleton, extend view composer, add translations, activate navigation, create FinancialReportController, register routes, update NavigationTest count assertions.",
+  "status": "completed",
+  "steps": [
+    "In app/Providers/AppServiceProvider.php register(): add 'use App\\Services\\FinancialReportingService;' import and '$this->app->singleton(FinancialReportingService::class);' alongside the four existing singletons (CompanyContextService, AccountingService, PaymentService, PurchaseService).",
+    "In app/Providers/AppServiceProvider.php boot(): extend the view()->composer() first argument array from ['inventory.*','commercial.*','cash-bank.*','accounting.*'] to ['inventory.*','commercial.*','cash-bank.*','accounting.*','reports.*'].",
+    "In lang/en/ui.php: append the top-level 'reports' => [...] key with all strings from the design (title, intro, report names and descriptions, filter labels, section headings, table column headers, metric names, comparison labels, status messages, empty states, print controls — exactly as specified in the design's translation section).",
+    "In lang/ar/ui.php: append the same 'reports' => [...] key with all Arabic translations from the design.",
+    "In config/navigation.php: find the 'reports' entry in the 'finance' group (currently has only 'key', 'label', 'icon') and add 'route' => 'reports.index' and 'active' => ['reports.*'].",
+    "Create app/Http/Controllers/FinancialReportController.php. The class is 'readonly' with constructor: 'public function __construct(private readonly FinancialReportingService $reports) {}'. Add comment immediately above/inside the constructor: '// Constructor injection is used here (unlike AccountingJournalController which resolves services per-action) to avoid nine repeated app() calls.' Implement ten public methods (index, trialBalance, generalLedger, incomeStatement, balanceSheet, performanceTrends, printTrialBalance, printGeneralLedger, printIncomeStatement, printBalanceSheet). Each calls app(CompanyContextService::class)->requireCurrent() first, then validates (see plan item 5 for full validation rules), then calls the service and passes result to the view. index() has no filters and no service call. Default filter values computed with Carbon. generalLedger/printGeneralLedger query FinancialAccount::where('company_id',...)->where('is_active',true)->orderBy('code')->get() and pass as $accounts.",
+    "In routes/web.php: add 'use App\\Http\\Controllers\\FinancialReportController;' to imports. Add the reports prefix group inside the Route::middleware('company.context')->group() block, after the closing brace of the 'accounting' prefix block. Ten routes as specified in the design: GET /, GET /trial-balance/print, GET /trial-balance, GET /general-ledger/print, GET /general-ledger, GET /income-statement/print, GET /income-statement, GET /balance-sheet/print, GET /balance-sheet, GET /performance-trends.",
+    "In tests/Feature/NavigationTest.php lines 98-99: change ->toBe(15) to ->toBe(16) and ->toBe(3) to ->toBe(2). These are the only changes to this file. (Current values confirmed as 15 and 3 by reading the file.)"
+  ],
+  "acceptance_criteria": [
+    "php artisan config:clear exits 0",
+    "php artisan route:list exits 0 and shows all 10 reports.* routes",
+    "php artisan test --filter NavigationTest passes all assertions including the updated 16/2 counts",
+    "php artisan test --filter AccountingUiTest passes (no regression from view composer change)",
+    "No existing test failures introduced"
+  ],
+  "verification": [
+    "php artisan config:clear",
+    "php artisan route:list | grep reports",
+    "php artisan test --filter NavigationTest",
+    "php artisan test --filter AccountingUiTest"
+  ],
+  "blocked_reason": null,
+  "findings": "FinancialReportController is declared 'readonly' but cannot extend the base Controller class (which is not readonly — PHP readonly class restriction). Solution: the class does not extend Controller. It has no authorize() calls and does not need AuthorizesRequests. All ten methods call app(CompanyContextService::class)->requireCurrent() for company isolation. FEAT-002 views should not expect $this->authorize() to be available in this controller."
+}
