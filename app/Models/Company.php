@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
+
 class Company extends Model
 {
     use SoftDeletes;
@@ -33,6 +34,25 @@ class Company extends Model
     public function users(): BelongsToMany
     {
         return $this->belongsToMany(User::class)->withTimestamps();
+    }
+
+    /**
+     * All roles defined for this company.
+     */
+    public function roles(): HasMany
+    {
+        return $this->hasMany(Role::class);
+    }
+
+    /**
+     * The user marked as owner in the company_user pivot, or null if none set.
+     */
+    public function owner(): ?User
+    {
+        return $this->users()
+            ->withPivot('is_owner')
+            ->wherePivot('is_owner', true)
+            ->first();
     }
 
     public function parties(): HasMany

@@ -21,6 +21,7 @@ use App\Models\Purchase;
 use App\Models\PurchaseItem;
 use App\Models\Revenue;
 use App\Models\RevenueItem;
+use App\Models\Role;
 use App\Models\StockCount;
 use App\Models\StockCountLine;
 use App\Models\StockMovement;
@@ -30,6 +31,7 @@ use App\Models\Warehouse;
 use App\Policies\CompanyOwnedPolicy;
 use App\Policies\CompanyPolicy;
 use App\Services\AccountingService;
+use App\Services\CompanyAuthorizationService;
 use App\Services\CompanyContextService;
 use App\Services\CompanySettingsService;
 use App\Services\FinancialReportingService;
@@ -57,6 +59,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(PurchaseService::class);
         $this->app->singleton(FinancialReportingService::class);
         $this->app->singleton(CompanySettingsService::class);
+        $this->app->singleton(CompanyAuthorizationService::class);
     }
 
     /**
@@ -70,11 +73,20 @@ class AppServiceProvider extends ServiceProvider
                 return;
             }
 
-            $view->with('activeCompany', app(CompanyContextService::class)->requireCurrent())
+            $companyContext = app(CompanyContextService::class);
+            $activeCompany  = $companyContext->requireCurrent();
+
+            // Build the set of permission keys for the current user in this company.
+            // Owners receive every key; role-less users receive an empty array.
+            $currentUserPermissions = $this->resolveUserPermissions($user, $activeCompany);
+
+            $view->with('activeCompany', $activeCompany)
                 ->with('companies', $user->companies()
                     ->orderBy('name')
                     ->orderBy('companies.id')
-                    ->get(['companies.id', 'companies.name', 'companies.base_currency']));
+                    ->get(['companies.id', 'companies.name', 'companies.base_currency']))
+                ->with('currentUserPermissions', $currentUserPermissions)
+                ->with('currentUserIsOwner', app(CompanyAuthorizationService::class)->userIsOwner($user, $activeCompany));
         });
 
         RateLimiter::for('login', function (Request $request): array {
@@ -115,5 +127,32 @@ class AppServiceProvider extends ServiceProvider
         ] as $model) {
             Gate::policy($model, CompanyOwnedPolicy::class);
         }
+    }
+
+    /**
+     * Resolve the permission key set for a user in a company.
+     * Returns all keys for owners, the role's keys for role holders,
+     * or an empty array for users with no role.
+     *
+     * @return string[]
+     */
+    private function resolveUserPermissions(User $user, Company $company): array
+    {
+        $authService = app(CompanyAuthorizationService::class);
+
+        if ($authService->userIsOwner($user, $company)) {
+            return Role::with('permissions')
+                ->where('company_id', $company->getKey())
+                ->where('slug', 'owner')
+                ->first()
+                ?->permissions
+                ->pluck('key')
+                ->all()
+                ?? [];
+        }
+
+        $role = $user->roleInCompany($company);
+
+        return $role !== null ? $role->permissions->pluck('key')->all() : [];
     }
 }

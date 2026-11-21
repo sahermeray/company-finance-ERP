@@ -31,7 +31,8 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
 
         $middleware->alias([
-            'company.context' => EnsureActiveCompany::class,
+            'company.context'     => EnsureActiveCompany::class,
+            'company.permission'  => \App\Http\Middleware\RequireCompanyPermission::class,
         ]);
 
         $middleware->prependToPriorityList(
