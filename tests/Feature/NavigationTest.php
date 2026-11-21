@@ -22,7 +22,6 @@ it('renders each navigation group once with only implemented destinations linked
     $response->assertOk()
         ->assertSeeInOrder(['Dashboard', 'Operations', 'Products & inventory', 'Finance', 'Administration'])
         ->assertSee('Payments')
-        ->assertSee('Coming soon')
         ->assertDontSee('ui.navigation.', false)
         ->assertDontSee('ui.inventory.', false);
 
@@ -95,8 +94,8 @@ it('renders each navigation group once with only implemented destinations linked
         ))->toBe(1);
     }
 
-    expect(substr_count($content, 'data-navigation-status="available"'))->toBe(17)
-        ->and(substr_count($content, 'data-navigation-status="coming-soon"'))->toBe(1);
+    expect(substr_count($content, 'data-navigation-status="available"'))->toBe(18)
+        ->and(substr_count($content, 'data-navigation-status="coming-soon"'))->toBe(0);
 });
 
 it('renders every navigation label in Arabic and English', function (): void {
@@ -121,7 +120,6 @@ it('renders every navigation label in Arabic and English', function (): void {
             'ui.navigation.reports' => 'Reports',
             'ui.navigation.users' => 'Users & permissions',
             'ui.navigation.settings' => 'Company settings',
-            'ui.navigation.soon' => 'Coming soon',
             'ui.inventory.overview' => 'Inventory overview',
             'ui.inventory.products' => 'Products',
             'ui.inventory.warehouses' => 'Warehouses',
@@ -145,7 +143,6 @@ it('renders every navigation label in Arabic and English', function (): void {
             'ui.navigation.reports' => 'التقارير',
             'ui.navigation.users' => 'المستخدمون والصلاحيات',
             'ui.navigation.settings' => 'إعدادات الشركة',
-            'ui.navigation.soon' => 'قريباً',
             'ui.inventory.overview' => 'نظرة عامة على المخزون',
             'ui.inventory.products' => 'المنتجات',
             'ui.inventory.warehouses' => 'المستودعات',

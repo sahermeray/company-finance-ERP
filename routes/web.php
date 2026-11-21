@@ -18,6 +18,7 @@ use App\Http\Controllers\PartyController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PurchaseController;
 use App\Http\Controllers\SalesController;
+use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
 
 Route::redirect('/', '/dashboard')->name('home');
@@ -154,6 +155,19 @@ Route::middleware('auth')->group(function (): void {
             Route::get('/balance-sheet/print', [FinancialReportController::class, 'printBalanceSheet'])->name('balance-sheet.print');
             Route::get('/balance-sheet', [FinancialReportController::class, 'balanceSheet'])->name('balance-sheet');
             Route::get('/performance-trends', [FinancialReportController::class, 'performanceTrends'])->name('performance-trends');
+        });
+
+        Route::prefix('users')->name('users.')->group(function (): void {
+            Route::get('/', [UserController::class, 'index'])->name('index');
+            Route::get('/create', [UserController::class, 'create'])->name('create');
+            Route::post('/', [UserController::class, 'store'])->name('store');
+            Route::get('/{user}', [UserController::class, 'show'])->name('show');
+            Route::get('/{user}/edit', [UserController::class, 'edit'])->name('edit');
+            Route::put('/{user}', [UserController::class, 'update'])->name('update');
+            Route::patch('/{user}/activate', [UserController::class, 'activate'])->name('activate');
+            Route::patch('/{user}/deactivate', [UserController::class, 'deactivate'])->name('deactivate');
+            Route::post('/{user}/memberships', [UserController::class, 'addMembership'])->name('memberships.add');
+            Route::delete('/{user}/memberships/{company}', [UserController::class, 'removeMembership'])->name('memberships.remove');
         });
     });
 });

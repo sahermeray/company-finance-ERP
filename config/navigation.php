@@ -144,6 +144,8 @@ return [
             [
                 'key' => 'users',
                 'label' => 'ui.navigation.users',
+                'route' => 'users.index',
+                'active' => ['users.*'],
                 'icon' => 'users',
             ],
             [

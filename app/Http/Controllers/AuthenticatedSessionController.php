@@ -32,6 +32,17 @@ class AuthenticatedSessionController extends Controller
         $user = $request->user();
         abort_unless($user instanceof User, 401);
 
+        // Reject deactivated accounts after credentials are verified.
+        if (! $user->is_active) {
+            Auth::logout();
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+
+            return back()
+                ->withErrors(['email' => __('ui.users.account_deactivated')])
+                ->onlyInput('email');
+        }
+
         if ($companyContext->current() === null && $user->companies()->count() !== 1) {
             return redirect()->route('companies.select');
         }
