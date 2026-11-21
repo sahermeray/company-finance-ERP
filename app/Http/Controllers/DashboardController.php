@@ -40,6 +40,9 @@ class DashboardController extends Controller
             $company = $companyContext->switchTo($user, (int) $companies->first()->getKey());
         }
 
+        // Enforce dashboard.view permission after the company context is resolved.
+        app(\App\Services\CompanyAuthorizationService::class)->requirePermission($user, $company, 'dashboard.view');
+
         [$fromDate, $toDate] = $this->periodDates($request, $company);
         $timezone = $company->timezone ?: config('app.timezone');
         $isCurrentSnapshot = $toDate === CarbonImmutable::now($timezone)->toDateString();

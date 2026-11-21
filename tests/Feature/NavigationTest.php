@@ -11,6 +11,11 @@ it('renders each navigation group once with only implemented destinations linked
     $company = Company::query()->create(['name' => 'Navigation company']);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    // Make owner so permission guards pass on dashboard and all nav links.
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company->id)
+        ->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
 
     $response = $this->actingAs($user)
         ->withSession([
@@ -37,7 +42,7 @@ it('renders each navigation group once with only implemented destinations linked
             'inventory-adjustments',
         ],
         'finance' => ['payments', 'expenses', 'cash-banks', 'accounting', 'reports'],
-        'administration' => ['users', 'company-settings'],
+        'administration' => ['users', 'roles', 'company-settings'],
     ];
     $actualItemsByGroup = collect(config('navigation'))
         ->mapWithKeys(fn (array $group): array => [$group['key'] => array_column($group['items'], 'key')])
@@ -94,7 +99,7 @@ it('renders each navigation group once with only implemented destinations linked
         ))->toBe(1);
     }
 
-    expect(substr_count($content, 'data-navigation-status="available"'))->toBe(18)
+    expect(substr_count($content, 'data-navigation-status="available"'))->toBe(19)
         ->and(substr_count($content, 'data-navigation-status="coming-soon"'))->toBe(0);
 });
 
@@ -102,6 +107,11 @@ it('renders every navigation label in Arabic and English', function (): void {
     $company = Company::query()->create(['name' => 'Translation company']);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    // Make owner so permission guards pass.
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company->id)
+        ->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
 
     $expectedTranslations = [
         'en' => [
@@ -119,6 +129,7 @@ it('renders every navigation label in Arabic and English', function (): void {
             'ui.navigation.accounting' => 'Accounting',
             'ui.navigation.reports' => 'Reports',
             'ui.navigation.users' => 'Users & permissions',
+            'ui.navigation.roles' => 'Roles & permissions',
             'ui.navigation.settings' => 'Company settings',
             'ui.inventory.overview' => 'Inventory overview',
             'ui.inventory.products' => 'Products',
@@ -142,6 +153,7 @@ it('renders every navigation label in Arabic and English', function (): void {
             'ui.navigation.accounting' => 'المحاسبة',
             'ui.navigation.reports' => 'التقارير',
             'ui.navigation.users' => 'المستخدمون والصلاحيات',
+            'ui.navigation.roles' => 'الأدوار والصلاحيات',
             'ui.navigation.settings' => 'إعدادات الشركة',
             'ui.inventory.overview' => 'نظرة عامة على المخزون',
             'ui.inventory.products' => 'المنتجات',
@@ -179,6 +191,11 @@ it('highlights active destinations and expands their navigation groups', functio
     $company = Company::query()->create(['name' => 'Active navigation company']);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    // Make owner so permission guards pass.
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company->id)
+        ->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
     $session = [
         'active_company_id' => $company->getKey(),
         'locale' => 'en',

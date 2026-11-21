@@ -19,6 +19,20 @@ pest()->extend(TestCase::class)
     ->in('Feature');
 
 /*
+|------------------------------------------------------------------------------------------------------------------------------------------
+| Reset company context singleton between tests
+|------------------------------------------------------------------------------------------------------------------------------------------
+|
+| CompanyContextService is registered as a singleton and keeps an in-memory
+| overriddenCompany reference. Without resetting it, a switchTo() call in one
+| test leaks into the next test, causing permission middleware to check against
+| a stale (now-deleted) company and return 403.
+*/
+beforeEach(function (): void {
+    $this->app->forgetInstance(\App\Services\CompanyContextService::class);
+});
+
+/*
 |--------------------------------------------------------------------------
 | Expectations
 |--------------------------------------------------------------------------

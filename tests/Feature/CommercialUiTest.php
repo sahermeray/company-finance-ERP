@@ -41,6 +41,9 @@ function commercialUiSetUp(): array
     ]);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company->id)->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
     Auth::login($user);
     app(CompanyContextService::class)->switchTo($user, (int) $company->getKey());
 
@@ -390,6 +393,9 @@ it('isolates commercial documents by company', function (): void {
         'base_currency' => 'SYP',
     ]);
     $otherCompany->users()->attach($context['user']);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $otherCompany->id)->where('user_id', $context['user']->id)
+        ->update(['is_owner' => true]);
     commercialUiAs($context['user'], $otherCompany);
 
     $otherParty = Party::query()->create([

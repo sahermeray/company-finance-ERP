@@ -24,6 +24,10 @@ class EnsureActiveCompany
 
         abort_unless($user instanceof User, 401);
 
+        // Reset any stale in-memory override from a previous request so that
+        // current() resolves the company from the session for this request.
+        $this->companyContext->clearOverride();
+
         // Block deactivated users from accessing any protected route.
         if (! $user->is_active) {
             Auth::logout();

@@ -26,6 +26,9 @@ function financialReportUiSetUp(): array
     ]);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company->id)->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
     Auth::login($user);
     app(CompanyContextService::class)->switchTo($user, (int) $company->getKey());
 

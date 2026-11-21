@@ -63,6 +63,9 @@ it('requires authentication and preserves session login and logout behavior', fu
     $company = Company::create(['name' => 'Login company']);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company->id)->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
 
     $this->from(route('login'))
         ->post(route('login.store'), ['email' => $user->email, 'password' => 'incorrect'])
@@ -83,6 +86,9 @@ it('shows company-scoped insight metrics and service-provided comparisons', func
     $otherCompany = Company::create(['name' => 'South Shop', 'base_currency' => 'SYP']);
     $user = User::factory()->create();
     $user->companies()->attach([$company->getKey(), $otherCompany->getKey()]);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
 
     $companyRevenue = uiAccount($company, '4000', 'revenue', 'revenue');
     $companyEquity = uiAccount($company, '3000', 'equity');
@@ -127,6 +133,9 @@ it('ignores a browser session company id that is not a user membership', functio
     $otherCompany = Company::create(['name' => 'Private shop']);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company->id)->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
 
     $this->actingAs($user)
         ->withSession(['active_company_id' => $otherCompany->getKey()])
@@ -143,6 +152,9 @@ it('requires selection for multiple companies and validates every company switch
     $outsiderCompany = Company::create(['name' => 'Unlinked shop']);
     $user = User::factory()->create();
     $user->companies()->attach([$firstCompany->getKey(), $secondCompany->getKey()]);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
 
     $this->actingAs($user)
         ->get(route('dashboard.index'))
@@ -174,6 +186,9 @@ it('renders unsupported and incomplete metrics without replacing them with zero'
     $company = Company::create(['name' => 'Data quality shop']);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company->id)->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
 
     $cash = uiAccount($company, '1000', 'asset');
     $unclassifiedExpense = uiAccount($company, '5000', 'expense');
@@ -202,6 +217,9 @@ it('marks current balance metrics and warnings unsupported for a historical repo
     $company = Company::create(['name' => 'Historical report shop', 'base_currency' => 'SYP']);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company->id)->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
 
     $metric = ['value' => '40.0000', 'availability' => 'available', 'currency' => 'SYP'];
     $subledger = [
@@ -259,6 +277,9 @@ it('labels a reported reconciliation difference as a discrepancy even without is
     $company = Company::create(['name' => 'Reconciliation shop']);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company->id)->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
 
     $metric = ['value' => '0.0000', 'availability' => 'available', 'currency' => 'SYP'];
     $subledger = [
@@ -307,6 +328,9 @@ it('rejects reversed custom reporting dates', function () {
     $company = Company::create(['name' => 'Date validation shop']);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company->id)->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
 
     $this->actingAs($user)
         ->withSession(['active_company_id' => $company->getKey()])
@@ -323,6 +347,9 @@ it('limits custom reporting ranges to 366 days', function () {
     $company = Company::create(['name' => 'Period limit shop']);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company->id)->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
 
     $this->actingAs($user)
         ->withSession(['active_company_id' => $company->getKey()])
@@ -340,6 +367,9 @@ it('uses the company timezone for preset reporting periods', function () {
     $company = Company::create(['name' => 'Timezone shop', 'timezone' => 'UTC']);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company->id)->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
 
     $this->actingAs($user)
         ->withSession(['active_company_id' => $company->getKey()])
@@ -352,6 +382,9 @@ it('defaults to Arabic and preserves the current dashboard URL when switching la
     $company = Company::create(['name' => 'Language shop']);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company->id)->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
 
     $this->actingAs($user)
         ->get(route('dashboard.index'))

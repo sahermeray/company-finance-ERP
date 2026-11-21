@@ -9,6 +9,7 @@ use App\Services\CompanyContextService;
 use App\Services\CompanySettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
@@ -29,6 +30,11 @@ function settingsSetUp(string $baseCurrency = 'SYP'): array
     ]);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    // Make the user an owner so all permission guards pass.
+    DB::table('company_user')
+        ->where('company_id', $company->id)
+        ->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
     Auth::login($user);
     app(CompanyContextService::class)->switchTo($user, (int) $company->getKey());
 

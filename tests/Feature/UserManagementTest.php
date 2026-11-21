@@ -4,6 +4,7 @@ use App\Models\Company;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 
 uses(RefreshDatabase::class);
@@ -17,6 +18,11 @@ function userMgmtSetUp(): array
     $company = Company::query()->create(['name' => 'Test Company '.uniqid()]);
     $user    = User::factory()->create(['is_active' => true]);
     $company->users()->attach($user);
+    // Make the user an owner so all permission guards pass.
+    DB::table('company_user')
+        ->where('company_id', $company->id)
+        ->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
 
     return compact('company', 'user');
 }
@@ -27,6 +33,19 @@ function userMgmtSession(Company $company): array
         'active_company_id' => $company->getKey(),
         'locale'            => 'en',
     ];
+}
+
+/**
+ * Attach a user to a company and immediately set is_owner = true so all
+ * permission guards pass for that user in that company.
+ */
+function attachAsOwner(Company $company, User $user): void
+{
+    $company->users()->attach($user);
+    DB::table('company_user')
+        ->where('company_id', $company->getKey())
+        ->where('user_id', $user->getKey())
+        ->update(['is_owner' => true]);
 }
 
 // ---------------------------------------------------------------------------
@@ -221,14 +240,14 @@ it('prevents deactivation of the last active user', function (): void {
     User::query()->update(['is_active' => false]);
     $company = Company::query()->create(['name' => 'Solo company']);
     $solo    = User::factory()->create(['is_active' => true]);
-    $company->users()->attach($solo);
+    attachAsOwner($company, $solo);
 
     // Acting as a second admin — but there is none, so we create an already-inactive admin
     // to call deactivate on the last active user.
     // The solo user tries to deactivate themselves — the self-check fires first.
     // Create a separate inactive requester so we can reach the last-active check:
     $requester = User::factory()->create(['is_active' => false]);
-    $company->users()->attach($requester);
+    attachAsOwner($company, $requester);
 
     // We bypass the is_active middleware check by using actingAs directly.
     // Set is_active = true on requester so company middleware passes.
@@ -256,7 +275,7 @@ it('prevents deactivation of the last active user', function (): void {
 
     // Now $requester is the only active user. Trying to deactivate $requester should fail.
     $other = User::factory()->create(['is_active' => true]);
-    $company->users()->attach($other);
+    attachAsOwner($company, $other);
 
     $this->actingAs($other)
         ->withSession(['active_company_id' => $company->getKey(), 'locale' => 'en'])
@@ -266,7 +285,7 @@ it('prevents deactivation of the last active user', function (): void {
     // Both $solo and $requester deactivated, $other is now the only active.
     // Try to deactivate $other by an outsider active user.
     $outsider = User::factory()->create(['is_active' => true]);
-    $company->users()->attach($outsider);
+    attachAsOwner($company, $outsider);
 
     $this->actingAs($outsider)
         ->withSession(['active_company_id' => $company->getKey(), 'locale' => 'en'])
@@ -293,8 +312,8 @@ it('prevents deactivation of the last active user', function (): void {
     // With 2 active users (attacker + lastActive2), deactivate attacker first, then try lastActive2.
     $attackerFresh = User::factory()->create(['is_active' => true]);
     $companyFresh  = Company::query()->create(['name' => 'Fresh company']);
-    $companyFresh->users()->attach($attackerFresh);
-    $companyFresh->users()->attach($lastActive2);
+    attachAsOwner($companyFresh, $attackerFresh);
+    attachAsOwner($companyFresh, $lastActive2);
 
     // Deactivate attackerFresh so only lastActive2 is active.
     $lastActive2->refresh(); // ensure active
@@ -315,8 +334,8 @@ it('prevents deactivation of the last active user', function (): void {
     // then it should fail because now only requester remains.
     $req2 = User::factory()->create(['is_active' => true]);
     $c2   = Company::query()->create(['name' => 'C2']);
-    $c2->users()->attach($req2);
-    $c2->users()->attach($singleActive);
+    attachAsOwner($c2, $req2);
+    attachAsOwner($c2, $singleActive);
 
     // 2 active users: req2, singleActive. Deactivate req2 by singleActive:
     $this->actingAs($singleActive)
@@ -329,7 +348,7 @@ it('prevents deactivation of the last active user', function (): void {
     // Now singleActive is the only active. Try to deactivate singleActive via req2 — but req2 is inactive.
     // We need an active third party. Create one, make them deactivate singleActive.
     $req3 = User::factory()->create(['is_active' => true]);
-    $c2->users()->attach($req3);
+    attachAsOwner($c2, $req3);
 
     // Now 2 active: singleActive, req3. Deactivate req3 by singleActive:
     $this->actingAs($singleActive)
@@ -344,7 +363,7 @@ it('prevents deactivation of the last active user', function (): void {
 
     // Create req4 (active), try to deactivate singleActive:
     $req4 = User::factory()->create(['is_active' => true]);
-    $c2->users()->attach($req4);
+    attachAsOwner($c2, $req4);
 
     // Now 2 active again. Deactivate req4 by singleActive:
     $this->actingAs($singleActive)
@@ -357,7 +376,7 @@ it('prevents deactivation of the last active user', function (): void {
     // Now try to deactivate singleActive — req5 is active but that makes 2.
     // The last-active check fires when count is exactly 1 BEFORE the deactivation.
     $req5 = User::factory()->create(['is_active' => true]);
-    $c2->users()->attach($req5);
+    attachAsOwner($c2, $req5);
 
     // 2 active: singleActive, req5. Deactivate singleActive by req5:
     $this->actingAs($req5)
@@ -371,7 +390,7 @@ it('prevents deactivation of the last active user', function (): void {
     // Now req5 is the only active user. Deactivating req5 by any other active user should fail.
     // The only remaining active is req5 themselves (self-check), so create req6 active:
     $req6 = User::factory()->create(['is_active' => true]);
-    $c2->users()->attach($req6);
+    attachAsOwner($c2, $req6);
 
     // 2 active: req5, req6. Deactivate req6 by req5:
     $this->actingAs($req5)
@@ -383,7 +402,7 @@ it('prevents deactivation of the last active user', function (): void {
 
     // Exactly 1 active (req5). Try to deactivate req5:
     $req7 = User::factory()->create(['is_active' => true]);
-    $c2->users()->attach($req7);
+    attachAsOwner($c2, $req7);
 
     // 2 active: req5, req7. Deactivate req7 by req5:
     $this->actingAs($req5)
@@ -395,7 +414,7 @@ it('prevents deactivation of the last active user', function (): void {
 
     // Create req8 (active) to try deactivating req5 (the last active):
     $req8 = User::factory()->create(['is_active' => true]);
-    $c2->users()->attach($req8);
+    attachAsOwner($c2, $req8);
 
     // 2 active: req5, req8. Deactivate req5 by req8:
     $this->actingAs($req8)
@@ -408,7 +427,7 @@ it('prevents deactivation of the last active user', function (): void {
 
     // The last-active check: create another active user, deactivate them so req8 is alone, then try deactivating req8:
     $req9 = User::factory()->create(['is_active' => true]);
-    $c2->users()->attach($req9);
+    attachAsOwner($c2, $req9);
     // Deactivate req9 so req8 is alone:
     $this->actingAs($req8)
         ->withSession(['active_company_id' => $c2->getKey(), 'locale' => 'en'])
@@ -419,7 +438,7 @@ it('prevents deactivation of the last active user', function (): void {
 
     // Now req8 is the ONLY active user. req10 tries to deactivate req8:
     $req10 = User::factory()->create(['is_active' => true]);
-    $c2->users()->attach($req10);
+    attachAsOwner($c2, $req10);
 
     // Deactivate req10 by req8 so only req8 is left:
     $this->actingAs($req8)
@@ -431,7 +450,7 @@ it('prevents deactivation of the last active user', function (): void {
 
     // Final: only req8 is active. Create req11 (active) who tries to deactivate req8.
     $req11 = User::factory()->create(['is_active' => true]);
-    $c2->users()->attach($req11);
+    attachAsOwner($c2, $req11);
 
     // 2 active: req8, req11. Deactivate req8 by req11, but first deactivate req11 so only req8 remains...
     // This chain is getting complex. Let's reset and use a simple direct scenario.
@@ -439,11 +458,11 @@ it('prevents deactivation of the last active user', function (): void {
 
     $lastOne = User::factory()->create(['is_active' => true]);
     $cLast   = Company::query()->create(['name' => 'Last company']);
-    $cLast->users()->attach($lastOne);
+    attachAsOwner($cLast, $lastOne);
 
     // We need an active caller who is not $lastOne.
     $caller = User::factory()->create(['is_active' => true]);
-    $cLast->users()->attach($caller);
+    attachAsOwner($cLast, $caller);
 
     expect(User::query()->where('is_active', true)->count())->toBe(2);
 
@@ -460,7 +479,7 @@ it('prevents deactivation of the last active user', function (): void {
     // - but middleware would block them. The only way to test the last-active check is via another active caller.
     // Create a new active user, so count=2. Deactivate caller so count=1. Then try to deactivate the new one.
     $activeCaller2 = User::factory()->create(['is_active' => true]);
-    $cLast->users()->attach($activeCaller2);
+    attachAsOwner($cLast, $activeCaller2);
 
     // Deactivate caller by activeCaller2 → succeeds (2 active → 1 active).
     $this->actingAs($activeCaller2)
@@ -472,7 +491,7 @@ it('prevents deactivation of the last active user', function (): void {
 
     // activeCaller2 is the only active user. Create activeCaller3 (active) to try deactivating activeCaller2.
     $activeCaller3 = User::factory()->create(['is_active' => true]);
-    $cLast->users()->attach($activeCaller3);
+    attachAsOwner($cLast, $activeCaller3);
 
     expect(User::query()->where('is_active', true)->count())->toBe(2);
 
@@ -487,7 +506,7 @@ it('prevents deactivation of the last active user', function (): void {
     // activeCaller3 is now the only active user.
     // activeCaller4 tries to deactivate activeCaller3 — should be REJECTED.
     $activeCaller4 = User::factory()->create(['is_active' => true]);
-    $cLast->users()->attach($activeCaller4);
+    attachAsOwner($cLast, $activeCaller4);
 
     // But wait: activeCaller4 is now active too → count = 2.
     // We need to deactivate activeCaller4 first so only activeCaller3 is left, then try with a new user.
@@ -520,7 +539,7 @@ it('prevents deactivation of the last active user', function (): void {
     User::query()->update(['is_active' => false]);
     $finalTarget = User::factory()->create(['is_active' => true]);
     $cFinal      = Company::query()->create(['name' => 'Final company']);
-    $cFinal->users()->attach($finalTarget);
+    attachAsOwner($cFinal, $finalTarget);
 
     expect(User::query()->where('is_active', true)->count())->toBe(1);
 
@@ -535,7 +554,7 @@ it('prevents deactivation of the last active user', function (): void {
     // (but self-check fires first) OR when a race condition occurs.
     // We test the controller branch by forcing only 1 active at the moment of the call:
     $finalRequester = User::factory()->create(['is_active' => true]);
-    $cFinal->users()->attach($finalRequester);
+    attachAsOwner($cFinal, $finalRequester);
     // Set finalTarget as inactive so only finalRequester is active:
     $finalTarget->is_active = false;
     $finalTarget->save();

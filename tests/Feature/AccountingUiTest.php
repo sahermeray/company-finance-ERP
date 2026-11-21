@@ -30,6 +30,9 @@ function accountingUiSetUp(string $baseCurrency = 'SYP'): array
     ]);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company->id)->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
     Auth::login($user);
     app(CompanyContextService::class)->switchTo($user, (int) $company->getKey());
 
@@ -309,6 +312,9 @@ it('does not show journals from another company', function (): void {
     // Create company2 and switch to it.
     $company2 = Company::query()->create(['name' => 'Other accounting company', 'base_currency' => 'SYP']);
     $company2->users()->attach($ctx1['user']);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company2->id)->where('user_id', $ctx1['user']->id)
+        ->update(['is_owner' => true]);
     accountingUiActAs($ctx1['user'], $company2);
 
     // Company2's journal listing should not include company1's journal.
@@ -510,6 +516,9 @@ it('shows the accounting navigation item as available', function (): void {
     $company = Company::query()->create(['name' => 'Nav company']);
     $user = User::factory()->create();
     $company->users()->attach($user);
+    \Illuminate\Support\Facades\DB::table('company_user')
+        ->where('company_id', $company->id)->where('user_id', $user->id)
+        ->update(['is_owner' => true]);
 
     $this->actingAs($user)
         ->withSession(['active_company_id' => $company->getKey(), 'locale' => 'en'])

@@ -2,11 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Role;
 use App\Models\User;
 use App\Services\CompanyContextService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rules\Password;
 use Illuminate\View\View;
@@ -89,11 +91,34 @@ class UserController extends Controller
         $memberships = $user->companies()->withPivot('created_at')->orderBy('name')->get();
         $isMember    = $memberships->contains(fn ($c) => $c->getKey() === $company->getKey());
 
+        // Role assignment: get current role and available roles for this company.
+        $pivot = $user->companies()
+            ->withPivot('role_id', 'is_owner')
+            ->whereKey($company->getKey())
+            ->first();
+
+        $currentRole   = null;
+        $currentIsOwner = false;
+
+        if ($pivot) {
+            $currentIsOwner = (bool) $pivot->pivot->is_owner;
+            if ($pivot->pivot->role_id) {
+                $currentRole = Role::find($pivot->pivot->role_id);
+            }
+        }
+
+        $availableRoles = Role::where('company_id', $company->getKey())
+            ->orderBy('name_en')
+            ->get();
+
         return view('users.show', [
-            'user'       => $user,
-            'memberships'=> $memberships,
-            'company'    => $company,
-            'isMember'   => $isMember,
+            'user'           => $user,
+            'memberships'    => $memberships,
+            'company'        => $company,
+            'isMember'       => $isMember,
+            'currentRole'    => $currentRole,
+            'currentIsOwner' => $currentIsOwner,
+            'availableRoles' => $availableRoles,
         ]);
     }
 
@@ -195,5 +220,66 @@ class UserController extends Controller
 
         return redirect()->route('users.show', $user)
             ->with('status', __('ui.users.membership_removed'));
+    }
+
+    public function assignRole(Request $request, User $user): RedirectResponse
+    {
+        $company = $this->companyContext->requireCurrent();
+
+        $data = $request->validate([
+            'role_id' => ['nullable', 'integer'],
+        ]);
+
+        $roleId = $data['role_id'] ?? null;
+
+        if ($roleId !== null) {
+            $role = Role::where('company_id', $company->getKey())->where('id', $roleId)->first();
+
+            if ($role === null) {
+                return redirect()->route('users.show', $user)
+                    ->withErrors(['role' => __('ui.roles.no_permission')]);
+            }
+
+            // Only owners may assign the owner role.
+            if ($role->is_protected) {
+                $callerIsOwner = (bool) auth()->user()
+                    ?->companies()
+                    ->withPivot('is_owner')
+                    ->whereKey($company->getKey())
+                    ->first()
+                    ?->pivot->is_owner;
+
+                if (! $callerIsOwner) {
+                    return redirect()->route('users.show', $user)
+                        ->withErrors(['role' => __('ui.roles.cannot_assign_owner')]);
+                }
+            }
+        }
+
+        // Guard: cannot remove the owner role from the last owner.
+        $pivot = $user->companies()
+            ->withPivot('role_id', 'is_owner')
+            ->whereKey($company->getKey())
+            ->first();
+
+        if ($pivot && (bool) $pivot->pivot->is_owner) {
+            $ownerCount = DB::table('company_user')
+                ->where('company_id', $company->getKey())
+                ->where('is_owner', true)
+                ->count();
+
+            if ($ownerCount <= 1 && $roleId === null) {
+                return redirect()->route('users.show', $user)
+                    ->withErrors(['role' => __('ui.roles.cannot_remove_last_owner')]);
+            }
+        }
+
+        DB::table('company_user')
+            ->where('company_id', $company->getKey())
+            ->where('user_id', $user->getKey())
+            ->update(['role_id' => $roleId]);
+
+        return redirect()->route('users.show', $user)
+            ->with('status', __('ui.roles.role_updated'));
     }
 }

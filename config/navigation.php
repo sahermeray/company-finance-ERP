@@ -149,6 +149,13 @@ return [
                 'icon' => 'users',
             ],
             [
+                'key'    => 'roles',
+                'label'  => 'ui.navigation.roles',
+                'route'  => 'roles.index',
+                'active' => ['roles.*'],
+                'icon'   => 'shield',
+            ],
+            [
                 'key'    => 'company-settings',
                 'label'  => 'ui.navigation.settings',
                 'route'  => 'settings.general',

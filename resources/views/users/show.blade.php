@@ -129,4 +129,46 @@
         </div>
     @endif
 </section>
+
+{{-- Role assignment panel (only shown when user is a member of the active company) --}}
+@if ($isMember)
+<section class="panel mb-6">
+    <div class="panel-heading"><h2 class="font-semibold text-slate-950">{{ __('ui.roles.assign_role') }}</h2></div>
+    <div class="px-5 py-4">
+        <p class="mb-3 text-sm text-slate-500">
+            {{ __('ui.roles.current_role') }}:
+            @if ($currentIsOwner)
+                <strong>{{ __('ui.roles.owner_badge') }}</strong>
+            @elseif ($currentRole)
+                <strong>{{ $currentRole->name_en }}</strong>
+            @else
+                <em>{{ __('ui.roles.no_role_assigned') }}</em>
+            @endif
+        </p>
+
+        @if ($availableRoles->isNotEmpty())
+            <form method="POST" action="{{ route('users.role.assign', $user) }}" class="flex flex-wrap items-end gap-3">
+                @csrf
+                @method('PATCH')
+                <div>
+                    <label for="role_id" class="form-label">{{ __('ui.roles.assign_role') }}</label>
+                    <select id="role_id" name="role_id" class="form-control">
+                        <option value="">{{ __('ui.roles.no_role_assigned') }}</option>
+                        @foreach ($availableRoles as $availableRole)
+                            <option value="{{ $availableRole->getKey() }}"
+                                @selected($currentRole && (int) $currentRole->getKey() === (int) $availableRole->getKey())>
+                                {{ $availableRole->name_en }}
+                                @if ($availableRole->is_protected)
+                                    ({{ __('ui.roles.owner_badge') }})
+                                @endif
+                            </option>
+                        @endforeach
+                    </select>
+                </div>
+                <button type="submit" class="button button-primary">{{ __('ui.roles.save') }}</button>
+            </form>
+        @endif
+    </div>
+</section>
+@endif
 @endsection

@@ -67,7 +67,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        view()->composer(['inventory.*', 'commercial.*', 'cash-bank.*', 'accounting.*', 'reports.*', 'settings.*', 'users.*'], function (View $view): void {
+        view()->composer(['inventory.*', 'commercial.*', 'cash-bank.*', 'accounting.*', 'reports.*', 'settings.*', 'users.*', 'roles.*'], function (View $view): void {
             $user = Auth::user();
             if (! $user instanceof User) {
                 return;
