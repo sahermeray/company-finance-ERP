@@ -53,13 +53,13 @@ class CompanyContextService
 
     private function sessionStore(): ?Store
     {
-        if (! app()->bound('session')) {
+        if (! app()->bound('session.store')) {
             return null;
         }
 
-        $session = session();
+        $store = app('session.store');
 
-        return $session instanceof Store ? $session : null;
+        return $store instanceof Store ? $store : null;
     }
 
     public function switchTo(User $user, int $companyId): Company
@@ -92,5 +92,18 @@ class CompanyContextService
         } finally {
             $this->overriddenCompany = $previousCompany;
         }
+    }
+
+    /**
+     * Clear any in-memory company override so that subsequent calls to
+     * current() fall back to resolving the company from the session.
+     *
+     * This is needed at the start of each HTTP request because the service
+     * is a singleton and switchTo() from a prior request leaves a stale
+     * overriddenCompany that would mask the session value.
+     */
+    public function clearOverride(): void
+    {
+        $this->overriddenCompany = null;
     }
 }
